@@ -1,5 +1,6 @@
 """
-Extracao de texto em cascata para os PDFs do acervo (Secao 4.1 do brief).
+Extracao de texto em cascata para os PDFs do acervo (Secao 4.2 do brief,
+revisao 2).
 
 Ordem por pagina:
     1. pdfplumber             - PDF com texto nativo/selecionavel (rapido, preserva posicao)
@@ -9,25 +10,39 @@ Ordem por pagina:
 
 Limitacao conhecida (documentada no README): nao ha fallback de visao
 (modelo multimodal) para paginas com graficos, layouts muito complexos ou
-extracao de baixissima qualidade - um modelo de visao local exigiria mais
-hardware do que se pode assumir disponivel para esta PoC. Nesses casos a
-pagina fica marcada como 'ocr_baixa_confianca' em vez de se tentar uma
-terceira via, e "% de paginas com extracao de baixa confianca" vira, ela
-mesma, uma metrica a reportar.
+extracao de baixissima qualidade - fora de escopo desta PoC (Secao 4.2).
+Nesses casos a pagina fica marcada como 'ocr_baixa_confianca'.
+
+**Ordem de leitura (limitacao conhecida, documentada no README):** PDFs em
+duas colunas ou com tabelas complexas podem ter a ordem de leitura
+fragmentada, sobretudo no caminho de OCR. `pdfplumber.extract_text()` usa
+por padrao a posicao dos caracteres na pagina para reconstituir a ordem de
+leitura (isso ja ajuda bastante no caminho nativo); o Tesseract roda com
+`--psm 3` (segmentacao automatica de blocos de texto), que lida melhor com
+colunas do que o modo totalmente sem segmentacao, mas continua sendo uma
+heuristica - nao ha garantia de ordem correta em layouts complexos.
+
+**Fila de quarentena (nova nesta revisao).** Um documento so e excluido do
+indice (nao vira `documentos`/`chunks`) quando falha de forma severa e
+classificavel - ver `classificar_documento()`. Falhas pontuais (uma pagina
+ruim dentro de um PDF majoritariamente bom) NAO tiram o documento da
+quarentena - ficam so registradas por pagina, como antes. Documentos
+quarentenados sao escritos em `data/quarentena.json`; quem grava a tabela
+`quarentena` no Postgres e o `ingestion/index.py`, que roda depois.
 
 O metodo usado em cada pagina fica registrado em `qualidade_extracao`
-(gravado no Postgres pelo embed_and_load.py).
+(gravado no Postgres por `ingestion/index.py`).
 
 Observacao registrada durante o desenvolvimento: os PDFs do Querido Diario
 ja passam por um pipeline de OCR proprio antes de serem publicados (a
 maioria carrega uma camada de texto mesmo quando a origem era escaneada).
 Por isso a cascata aqui decide o fallback por QUALIDADE do texto extraido,
 nao apenas por ausencia de texto - o que tambem e o cenario mais realista
-para o acervo do MPRJ, onde documentos digitalizados provavelmente ja terao
-algum texto via OCR de terceiros, de qualidade variavel. Na amostra
-coletada, isso se confirmou: a maioria das paginas tem texto nativo via
-pdfplumber, mas paginas individuais dentro de diarios (anexos escaneados,
-assinaturas, carimbos) caem no fallback de OCR.
+para o acervo do MPRJ. Na amostra coletada (70 documentos), isso se
+confirmou: 1521 paginas via pdfplumber, 114 via OCR, 19 (1,1%) como
+'ocr_baixa_confianca' - nenhum documento inteiro precisou ir para
+quarentena (as paginas problematicas sao anexos/assinaturas isolados
+dentro de diarios majoritariamente digitais).
 
 Uso:
     python extract.py
@@ -42,13 +57,30 @@ import unicodedata
 import pdfplumber
 import pytesseract
 from pdf2image import convert_from_path
+from pdf2image.exceptions import PDFPageCountError
+from pdfminer.pdfparser import PDFSyntaxError
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 OUTPUT_DIR = os.path.join(DATA_DIR, "extracted")
 MANIFEST_PATH = os.path.join(DATA_DIR, "manifest.json")
+QUARENTENA_PATH = os.path.join(DATA_DIR, "quarentena.json")
 
 MIN_CHARS_PER_PAGE = 40  # abaixo disso, texto nativo e considerado ausente
 MIN_ALPHA_RATIO = 0.5  # abaixo disso, texto nativo/OCR e considerado ruim (garbled)
+
+MIN_CHARS_DOCUMENTO = 100  # abaixo disso no documento inteiro -> quarentena 'texto_vazio'
+MIN_CHARS_DOCUMENTO_SUFICIENTE = 300  # abaixo disso -> quarentena 'texto_insuficiente'
+LIMIAR_FALHA_OCR = 0.8  # proporcao de paginas 'ocr_baixa_confianca' -> quarentena 'falha_ocr'
+
+TESSERACT_CONFIG = "--psm 3"  # segmentacao automatica de blocos - ajuda em colunas/tabelas
+
+
+class ErroClassificado(Exception):
+    def __init__(self, tipo_erro: str, mensagem: str, metodo_que_falhou: str = ""):
+        super().__init__(mensagem)
+        self.tipo_erro = tipo_erro
+        self.mensagem = mensagem
+        self.metodo_que_falhou = metodo_que_falhou
 
 
 def alpha_ratio(text: str) -> float:
@@ -82,11 +114,33 @@ def extract_ocr(pdf_path: str, page_number: int) -> str | None:
         return None
     if not images:
         return None
-    return pytesseract.image_to_string(images[0], lang="por")
+    return pytesseract.image_to_string(images[0], lang="por", config=TESSERACT_CONFIG)
 
 
 def normalize_whitespace(text: str) -> str:
     return re.sub(r"[ \t]+", " ", text).strip()
+
+
+def classificar_documento(paginas: list[dict]) -> str | None:
+    """Decide se o documento inteiro deve ir para quarentena. Retorna o
+    tipo de erro classificado, ou None se o documento esta ok (mesmo que
+    paginas individuais tenham ficado com baixa confianca)."""
+    if not paginas:
+        return "texto_vazio"
+
+    total_chars = sum(len(p["texto"]) for p in paginas)
+    if total_chars < MIN_CHARS_DOCUMENTO:
+        return "texto_vazio"
+    if total_chars < MIN_CHARS_DOCUMENTO_SUFICIENTE:
+        return "texto_insuficiente"
+
+    proporcao_baixa_confianca = sum(
+        1 for p in paginas if p["metodo"] == "ocr_baixa_confianca"
+    ) / len(paginas)
+    if proporcao_baixa_confianca >= LIMIAR_FALHA_OCR:
+        return "falha_ocr"
+
+    return None
 
 
 def process_document(entry: dict) -> dict:
@@ -96,37 +150,61 @@ def process_document(entry: dict) -> dict:
     paginas = []
     metodos_usados = set()
 
-    with pdfplumber.open(pdf_path) as pdf:
-        for i, page in enumerate(pdf.pages, start=1):
-            native_text, tables_md = extract_native(page)
-            metodo = "pdfplumber"
-            texto_final = native_text or ""
+    try:
+        pdf = pdfplumber.open(pdf_path)
+    except (PDFSyntaxError, PDFPageCountError) as exc:
+        raise ErroClassificado("pdf_corrompido", str(exc), "pdfplumber.open") from exc
+    except UnicodeDecodeError as exc:
+        raise ErroClassificado("encoding_invalido", str(exc), "pdfplumber.open") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise ErroClassificado("outro", str(exc), "pdfplumber.open") from exc
 
-            if not text_quality_ok(native_text):
-                ocr_text = extract_ocr(pdf_path, i)
-                if text_quality_ok(ocr_text):
-                    metodo = "ocr"
-                    texto_final = ocr_text
-                else:
-                    # nem texto nativo nem OCR local atingiram um minimo de
-                    # confianca - sem fallback de visao nesta PoC (ver
-                    # docstring do modulo). Registra o melhor que se tem.
-                    metodo = "ocr_baixa_confianca"
-                    texto_final = ocr_text or native_text or ""
+    try:
+        with pdf:
+            for i, page in enumerate(pdf.pages, start=1):
+                try:
+                    native_text, tables_md = extract_native(page)
+                except Exception as exc:  # noqa: BLE001
+                    raise ErroClassificado("outro", str(exc), f"pdfplumber pagina {i}") from exc
 
-            if tables_md:
-                texto_final += "\n\n[TABELA]\n" + "\n\n[TABELA]\n".join(tables_md)
+                metodo = "pdfplumber"
+                texto_final = native_text or ""
 
-            metodos_usados.add(metodo)
-            paginas.append(
-                {
-                    "pagina": i,
-                    "texto": normalize_whitespace(texto_final),
-                    "metodo": metodo,
-                    "tem_tabela": bool(tables_md),
-                }
-            )
-            print(f"   pagina {i}: {metodo} ({len(texto_final)} chars)")
+                if not text_quality_ok(native_text):
+                    ocr_text = extract_ocr(pdf_path, i)
+                    if text_quality_ok(ocr_text):
+                        metodo = "ocr"
+                        texto_final = ocr_text
+                    else:
+                        metodo = "ocr_baixa_confianca"
+                        texto_final = ocr_text or native_text or ""
+
+                if tables_md:
+                    texto_final += "\n\n[TABELA]\n" + "\n\n[TABELA]\n".join(tables_md)
+
+                metodos_usados.add(metodo)
+                paginas.append(
+                    {
+                        "pagina": i,
+                        "texto": normalize_whitespace(texto_final),
+                        "metodo": metodo,
+                        "tem_tabela": bool(tables_md),
+                    }
+                )
+                print(f"   pagina {i}: {metodo} ({len(texto_final)} chars)")
+    except ErroClassificado:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ErroClassificado("outro", str(exc)) from exc
+
+    tipo_erro = classificar_documento(paginas)
+    if tipo_erro:
+        metodo_que_falhou = max(metodos_usados, default="") or "nenhum"
+        raise ErroClassificado(
+            tipo_erro,
+            f"{len(paginas)} paginas, {sum(len(p['texto']) for p in paginas)} chars no total",
+            metodo_que_falhou,
+        )
 
     metodo_predominante = max(metodos_usados, key=lambda m: sum(1 for p in paginas if p["metodo"] == m))
 
@@ -144,6 +222,8 @@ def main():
         manifest = json.load(f)
 
     resultados = []
+    quarentena = []
+
     for entry in manifest:
         out_path = os.path.join(OUTPUT_DIR, entry["arquivo_local"] + ".json")
         if os.path.exists(out_path):
@@ -152,7 +232,22 @@ def main():
                 resultados.append(json.load(f))
             continue
 
-        resultado = process_document(entry)
+        try:
+            resultado = process_document(entry)
+        except ErroClassificado as exc:
+            print(f"  [QUARENTENA: {exc.tipo_erro}] {entry['arquivo_local']}: {exc.mensagem}")
+            quarentena.append(
+                {
+                    "arquivo_local": entry["arquivo_local"],
+                    "municipio": entry.get("municipio"),
+                    "territory_id": entry.get("territory_id"),
+                    "tipo_erro": exc.tipo_erro,
+                    "mensagem_erro": exc.mensagem,
+                    "metodo_que_falhou": exc.metodo_que_falhou,
+                }
+            )
+            continue
+
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(resultado, f, ensure_ascii=False, indent=2)
         resultados.append(resultado)
@@ -161,6 +256,9 @@ def main():
     with open(extracted_manifest_path, "w", encoding="utf-8") as f:
         json.dump(resultados, f, ensure_ascii=False, indent=2)
 
+    with open(QUARENTENA_PATH, "w", encoding="utf-8") as f:
+        json.dump(quarentena, f, ensure_ascii=False, indent=2)
+
     metodos_count = {}
     for r in resultados:
         for p in r["paginas"]:
@@ -168,9 +266,14 @@ def main():
     total_paginas = sum(metodos_count.values())
     baixa_confianca_pct = 100 * metodos_count.get("ocr_baixa_confianca", 0) / max(total_paginas, 1)
 
-    print(f"\nExtracao concluida: {len(resultados)} documentos, {total_paginas} paginas.")
+    print(f"\nExtracao concluida: {len(resultados)} documentos ok, {len(quarentena)} em quarentena, {total_paginas} paginas.")
     print("Metodos usados por pagina:", metodos_count)
     print(f"% paginas com extracao de baixa confianca: {baixa_confianca_pct:.1f}%")
+    if quarentena:
+        tipos = {}
+        for q in quarentena:
+            tipos[q["tipo_erro"]] = tipos.get(q["tipo_erro"], 0) + 1
+        print("Quarentena por tipo de erro:", tipos)
 
 
 if __name__ == "__main__":
