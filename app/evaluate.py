@@ -11,7 +11,15 @@ programaticamente contra o texto do chunk.
 """
 from __future__ import annotations
 
+import re
+
 from app.llm import OLLAMA_MODEL, avaliar_criterio_unico
+
+_ESPACOS_RE = re.compile(r"\s+")
+
+
+def _normalizar_espacos(texto: str) -> str:
+    return _ESPACOS_RE.sub(" ", texto).strip()
 
 
 def criterios_ativos(conn) -> list[dict]:
@@ -26,10 +34,19 @@ def _citacao_verificada(trecho_citado: str, texto_chunk: str) -> bool:
     """A taxa de citacao NAO verificada e uma metrica a reportar (Secao
     4.6) - evidencia direta da confiabilidade do modelo local: ele pode
     alegar um trecho que nao existe literalmente no chunk (alucinacao de
-    citacao)."""
+    citacao).
+
+    A comparacao normaliza espacos em branco (`\\s+` -> um espaco) dos dois
+    lados antes de comparar. Sem isso, a verificacao dava falso-negativo em
+    ~100% dos casos na amostra real: o texto extraido do PDF carrega quebras
+    de linha no meio de frases (artefato do pdfplumber/OCR - ver README), e
+    o modelo naturalmente "limpa" isso ao citar (troca a quebra por um
+    espaco) mesmo citando o mesmo conteudo literal. Normalizar espacos
+    verifica o CONTEUDO da citacao, que e o que importa aqui - nao a
+    formatacao de quebra de linha, que e ruido de extracao, nao do modelo."""
     if not trecho_citado:
         return True  # nada a verificar (criterio nao se aplica)
-    return trecho_citado in texto_chunk
+    return _normalizar_espacos(trecho_citado) in _normalizar_espacos(texto_chunk)
 
 
 def avaliar_chunk(conn, chunk: dict, criterios: list[dict]) -> list[dict]:

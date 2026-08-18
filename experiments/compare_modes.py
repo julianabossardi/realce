@@ -99,14 +99,32 @@ CASOS_DE_TESTE = [
 MODOS = ["lexico", "vetorial", "hibrido"]
 
 
-def buscar(consulta: str, modo: str) -> tuple[list[str], float, list[bool]]:
+def buscar(consulta: str, modo: str, avaliar: bool = False, limite: int = LIMITE_RESULTADOS) -> tuple[list[str], float, list[bool]]:
     """Retorna (documentos recuperados em ordem, latencia em segundos,
-    lista de citacao_verificada de todas as avaliacoes retornadas)."""
+    lista de citacao_verificada das avaliacoes retornadas).
+
+    `avaliar=False` por padrao: a primeira versao deste experimento pedia
+    avaliacao por criterio (via LLM) em TODA chamada de busca, para as 3
+    modos x 7 perguntas - isso significa ate `limite x criterios ativos`
+    avaliacoes por chamada (aqui, 10 x 4 = 40), o suficiente para estourar
+    o timeout de 600s numa maquina sob carga. Recall/precisao/latencia sao
+    medidos com avaliar=False (retrieval puro, o que essas metricas
+    realmente medem); a taxa de citacao nao verificada e medida a parte,
+    uma unica vez por pergunta (`medir_citacoes`), com avaliar=True."""
     inicio = time.perf_counter()
     resp = requests.post(
         f"{API_URL}/search",
-        json={"consulta": consulta, "modo": modo, "limite": LIMITE_RESULTADOS},
-        timeout=600,
+        # perfil com_clearance: a regra simples de nivel_restricao desta PoC
+        # (ver README) marca a grande maioria dos documentos da amostra
+        # como 'sigiloso' (basta ter um CPF/RG em qualquer lugar - comum em
+        # editais com lista de candidatos). Um analista autorizado
+        # investigando o acervo teria clearance; o experimento simula essa
+        # persona, nao o usuario sem permissao nenhuma.
+        json={
+            "consulta": consulta, "modo": modo, "limite": limite,
+            "perfil": "com_clearance", "avaliar": avaliar,
+        },
+        timeout=900,
     )
     latencia = time.perf_counter() - inicio
     resp.raise_for_status()
@@ -121,6 +139,20 @@ def buscar(consulta: str, modo: str) -> tuple[list[str], float, list[bool]]:
         a["citacao_verificada"] for r in resultados for a in r.get("avaliacoes", []) if a["trecho_citado"]
     ]
     return vistos, latencia, citacoes_verificadas
+
+
+LIMITE_AVALIACAO = 4  # menor que LIMITE_RESULTADOS: so para manter o custo de
+# LLM tratavel na medicao da taxa de citacao (4 candidatos x 4 criterios =
+# no maximo 16 avaliacoes por pergunta, em vez de 40)
+
+
+def medir_citacoes(pergunta: str) -> list[bool]:
+    """Roda o modo hibrido com avaliacao ligada (uma unica vez por
+    pergunta, sobre um numero menor de candidatos - ver LIMITE_AVALIACAO)
+    so para medir a taxa de citacao nao verificada - nao entra no calculo
+    de recall/precisao/latencia de busca."""
+    _, _, citacoes = buscar(pergunta, "hibrido", avaliar=True, limite=LIMITE_AVALIACAO)
+    return citacoes
 
 
 def recall_precisao(recuperados: list[str], relevantes: set[str]) -> tuple[float, float]:
@@ -140,7 +172,6 @@ def buscar_quarentena() -> dict:
 def main():
     linhas = []
     latencias_por_modo = {modo: [] for modo in MODOS}
-    citacoes_por_modo = {modo: [] for modo in MODOS}
 
     for caso in CASOS_DE_TESTE:
         pergunta = caso["pergunta"]
@@ -151,26 +182,41 @@ def main():
         print(f"  gabarito: {len(relevantes)} documento(s)")
 
         for modo in MODOS:
-            docs, latencia, citacoes = buscar(pergunta, modo)
+            docs, latencia, _ = buscar(pergunta, modo)  # avaliar=False (retrieval puro)
             recall, precisao = recall_precisao(docs, relevantes)
             linha[f"recall_{modo}"] = recall
             linha[f"precisao_{modo}"] = precisao
             latencias_por_modo[modo].append(latencia)
-            citacoes_por_modo[modo].extend(citacoes)
-            print(f"  {modo:10s} -> recall {recall:.2f}, precisao {precisao:.2f}, latencia {latencia:.1f}s  ({docs})")
+            print(f"  {modo:10s} -> recall {recall:.2f}, precisao {precisao:.2f}, latencia {latencia:.2f}s  ({docs})")
 
         linhas.append(linha)
 
     print("\n\n## Comparacao final (media das perguntas)\n")
-    print("| Modo | Recall médio | Precisão média | Latência média (s) | % citação não verificada |")
-    print("|---|---|---|---|---|")
+    print("| Modo | Recall médio | Precisão média | Latência média de busca (s) |")
+    print("|---|---|---|---|")
     for modo in MODOS:
         recall_medio = statistics.mean(l[f"recall_{modo}"] for l in linhas)
         precisao_media = statistics.mean(l[f"precisao_{modo}"] for l in linhas)
         latencia_media = statistics.mean(latencias_por_modo[modo])
-        citacoes = citacoes_por_modo[modo]
-        pct_nao_verificada = 100 * (1 - sum(citacoes) / len(citacoes)) if citacoes else 0.0
-        print(f"| {modo} | {recall_medio:.2f} | {precisao_media:.2f} | {latencia_media:.1f} | {pct_nao_verificada:.1f}% |")
+        print(f"| {modo} | {recall_medio:.2f} | {precisao_media:.2f} | {latencia_media:.2f} |")
+
+    print("\n### Avaliação por critério (modo híbrido, com LLM ligado)\n")
+    citacoes_todas = []
+    latencias_com_avaliacao = []
+    for caso in CASOS_DE_TESTE:
+        inicio = time.perf_counter()
+        citacoes = medir_citacoes(caso["pergunta"])
+        latencias_com_avaliacao.append(time.perf_counter() - inicio)
+        citacoes_todas.extend(citacoes)
+        pct = 100 * (1 - sum(citacoes) / len(citacoes)) if citacoes else 0.0
+        print(f"  {caso['pergunta'][:60]:60s} -> {len(citacoes)} avaliação(ões) com citação, {pct:.0f}% não verificada")
+
+    pct_nao_verificada_total = (
+        100 * (1 - sum(citacoes_todas) / len(citacoes_todas)) if citacoes_todas else 0.0
+    )
+    latencia_media_avaliacao = statistics.mean(latencias_com_avaliacao) if latencias_com_avaliacao else 0.0
+    print(f"\n**% citação não verificada (geral): {pct_nao_verificada_total:.1f}%**")
+    print(f"**Latência média por consulta com avaliação por critério ligada: {latencia_media_avaliacao:.1f}s**")
 
     for tipo in ("semantico", "exato"):
         subset = [l for l in linhas if l["tipo"] == tipo]

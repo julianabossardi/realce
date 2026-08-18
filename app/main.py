@@ -25,6 +25,7 @@ class BuscaRequest(BaseModel):
     perfil: str = "sem_clearance"  # "sem_clearance" | "com_clearance"
     filtro_municipio: str | None = None
     filtro_tipo_documento: str | None = None
+    avaliar: bool = True  # False = so retrieval, sem chamar o LLM (ver nota abaixo)
 
 
 class FeedbackRequest(BaseModel):
@@ -36,7 +37,7 @@ class FeedbackRequest(BaseModel):
     comentario: str | None = None
 
 
-def _anexar_documentos_e_avaliar(conn, chunks: list[dict], perfil: str) -> list[dict]:
+def _anexar_documentos_e_avaliar(conn, chunks: list[dict], perfil: str, avaliar: bool = True) -> list[dict]:
     if not chunks:
         return []
     doc_ids = list({c["documento_id"] for c in chunks})
@@ -59,7 +60,7 @@ def _anexar_documentos_e_avaliar(conn, chunks: list[dict], perfil: str) -> list[
             for row in cur.fetchall():
                 entidades_por_doc.setdefault(row["documento_id"], []).append(row)
 
-    criterios = criterios_ativos(conn)
+    criterios = criterios_ativos(conn) if avaliar else []
 
     resultado = []
     for c in chunks:
@@ -73,7 +74,7 @@ def _anexar_documentos_e_avaliar(conn, chunks: list[dict], perfil: str) -> list[
             texto = desmascarar_texto(texto, entidades_doc)
             registrar_auditoria(conn, perfil, c["documento_id"], [e["pseudonimo"] for e in entidades_doc])
 
-        avaliacoes = avaliar_chunk(conn, c, criterios)
+        avaliacoes = avaliar_chunk(conn, c, criterios) if avaliar else []
 
         resultado.append(
             {
@@ -115,6 +116,12 @@ def filtros():
 
 @app.post("/search")
 def search(req: BuscaRequest):
+    """`avaliar=False` pula a chamada ao LLM e devolve so o retrieval - usado
+    por `experiments/compare_modes.py` para medir recall/precisao/latencia
+    de cada modo sem pagar o custo de ate `limite x criterios ativos`
+    avaliacoes por chamada (isso travou o experimento com timeout na
+    primeira tentativa - ver README). A demo (Streamlit) usa avaliar=True,
+    o padrao, para mostrar score/justificativa/citacao ao vivo."""
     conn = get_connection()
     try:
         chunks = buscar(
@@ -122,7 +129,7 @@ def search(req: BuscaRequest):
             filtro_municipio=req.filtro_municipio,
             filtro_tipo_documento=req.filtro_tipo_documento,
         )
-        resultados = _anexar_documentos_e_avaliar(conn, chunks, req.perfil)
+        resultados = _anexar_documentos_e_avaliar(conn, chunks, req.perfil, req.avaliar)
         return {"modo": req.modo, "consulta": req.consulta, "resultados": resultados}
     finally:
         conn.close()

@@ -129,6 +129,15 @@ ativa durante a sessão (não só geração direta):
 - a correção do import incorreto de `PDFSyntaxError` ao implementar a fila de quarentena (a
   exceção real vem de `pdfminer.pdfparser`, não de `pdf2image.exceptions` — mesmo nome de classe,
   módulos diferentes; descoberto testando com um PDF corrompido sintético)
+- o experimento (`experiments/compare_modes.py`) estourou timeout de 600s na primeira tentativa —
+  o endpoint `/search` chamava avaliação por critério (LLM) sobre todo candidato em toda busca,
+  então medir 3 modos × 7 perguntas significava até `limite × critérios ativos` avaliações por
+  chamada. Corrigido separando retrieval (o que recall/precisão/latência de busca medem) de
+  avaliação por critério (medida à parte, ver `avaliar=false` em `app/main.py`)
+- a métrica de citação não verificada marcava ~100% dos casos como não verificados por causa de
+  quebras de linha no meio de frases no texto extraído (artefato do `pdfplumber`/OCR) que o modelo
+  naturalmente normaliza ao citar — corrigido normalizando espaços em branco dos dois lados antes
+  de comparar (`app/evaluate.py::_citacao_verificada`); a taxa real caiu para 14,3%
 
 **Desenvolvido do zero (decisões de design, não geração de boilerplate):**
 - a separação `ingestion/source_querido_diario.py` como módulo de fronteira isolado (Seção 3) —
@@ -190,6 +199,14 @@ Cada documento carrega `nivel_restricao` (`publico`/`restrito`/`sigiloso`), atri
 simples nesta PoC (`ingestion/index.py::_classificar_nivel_restricao`): sem entidade sensível →
 público; com nome de pessoa → restrito; com CPF/RG → sigiloso. Documento sigiloso **some** do
 resultado para quem não tem clearance, em vez de aparecer mascarado (`app/access.py`).
+
+**Achado real na amostra**: essa regra simples classificou **69 dos 70 documentos como sigilosos**
+— basta um único CPF/RG aparecer em qualquer lugar do documento (comum em editais com lista de
+candidatos, tabelas de pensionistas, etc.), e diários oficiais tendem a acumular vários atos
+diferentes por edição. Isso é uma consequência honesta da regra escolhida, não um bug, mas deixa
+claro que uma regra binária "tem CPF → sigiloso" é grosseira demais para uso real — o experimento
+(abaixo) precisou rodar com `perfil=com_clearance` para não medir recall/precisão sobre um acervo
+quase inteiramente invisível. Ver [Limitações](#limitações-conhecidas).
 
 ### Critérios como dado (Seção 4.6)
 `criterio` é uma tabela (chave, descrição, versão, ativo) — incluir, editar ou desativar um
@@ -257,7 +274,65 @@ Ver [experiments/compare_modes.py](experiments/compare_modes.py) para o script c
 metodologia do gabarito (7 perguntas: 5 de descrição semântica, 2 de termo exato). Resultado obtido
 rodando as perguntas contra os 70 documentos da amostra, via API local:
 
-<!-- RESULTADO_COMPARACAO_V2 -->
+**Resultado geral (média das 7 perguntas):**
+
+| Modo | Recall médio | Precisão média | Latência média de busca (s) |
+|---|---|---|---|
+| léxico | 0.38 | 0.28 | 0.96 |
+| vetorial | 0.22 | 0.10 | 3.39 |
+| **híbrido** | **0.43** | 0.14 | 2.72 |
+
+**Só perguntas de descrição semântica** (5 perguntas — onde o vocabulário da pergunta diverge do
+documento):
+
+| Modo | Recall médio | Precisão média |
+|---|---|---|
+| léxico | 0.13 | 0.15 |
+| vetorial | 0.11 | 0.12 |
+| **híbrido** | **0.20** | 0.15 |
+
+**Só perguntas de termo exato** (2 perguntas — nome de pessoa via índice de entidades, e número de
+portaria):
+
+| Modo | Recall médio | Precisão média |
+|---|---|---|
+| léxico | **1.00** | **0.60** |
+| vetorial | 0.50 | 0.06 |
+| híbrido | **1.00** | 0.13 |
+
+**Avaliação por critério (modo híbrido, LLM ligado):** 14,3% de citações não verificadas (2 de 14
+avaliações com citação retornaram um trecho que não bate literalmente com o chunk após normalizar
+espaços — ver nota abaixo). Latência média por consulta com avaliação ligada: ~217s (4 candidatos ×
+até 4 critérios cada, em CPU, sem paralelismo). **Quarentena: 0% do acervo** (0 de 70 documentos —
+a amostra não teve nenhum caso de falha severa de extração, ver Decisões técnicas).
+
+**A hipótese se confirma, com uma ressalva importante sobre precisão.** No agregado e no subconjunto
+semântico, o híbrido supera as duas pontas em recall — exatamente o que a hipótese revisada previa.
+No subconjunto de termo exato, híbrido empata com léxico em recall (ambos 1.00), mas **léxico tem
+precisão bem maior** (0.60 vs. 0.13): quando o termo é exato, a busca vetorial trazida pela fusão
+RRF adiciona candidatos semanticamente relacionados mas irrelevantes ao termo específico buscado,
+diluindo a precisão sem ganhar recall adicional. Isso não invalida a hipótese (o objetivo é recall
+alto sem perder o léxico como opção), mas é um resultado que contraria a expectativa ingênua de que
+"híbrido é sempre melhor nos dois eixos" — e é exatamente o tipo de achado que o experimento deveria
+revelar (Seção 5 do brief: "o resultado interessa mesmo se contrariar a expectativa"). Em produção,
+isso sugere valor em deixar o usuário optar por léxico puro quando já sabe exatamente o termo que
+procura (nome, número de processo) — o que a interface de demonstração já permite.
+
+**Nota sobre a normalização da verificação de citação:** a primeira versão desta métrica marcava
+~100% das citações como "não verificadas" — não porque o modelo alucinava, mas porque o texto
+extraído do PDF carrega quebras de linha no meio de frases (artefato do `pdfplumber`/OCR), e o
+modelo naturalmente substitui a quebra por um espaço ao citar o mesmo conteúdo literal. A correção
+(`app/evaluate.py::_citacao_verificada`) normaliza espaços em branco dos dois lados antes de
+comparar — depois da correção, a taxa caiu para 14,3%, um número que soa plausível para citação
+alucinada real (um dos casos observados: o modelo colou dois valores monetários não-contíguos do
+mesmo chunk como se fossem uma citação única).
+
+**Nota sobre o custo do experimento:** a primeira tentativa deste script chamava `/search` com
+avaliação por critério ligada em toda busca de teste (3 modos × 7 perguntas), o que significa até
+`limite × critérios ativos` avaliações por chamada (10 × 4 = 40) — e estourou o timeout de 600s.
+A correção foi separar retrieval (`avaliar=false`, o que recall/precisão/latência de busca
+realmente medem) de avaliação por critério (medida à parte, uma vez por pergunta, sobre um número
+menor de candidatos) — ver `app/main.py` e `experiments/compare_modes.py`.
 
 ---
 
@@ -284,9 +359,11 @@ rodando as perguntas contra os 70 documentos da amostra, via API local:
   que dependem de levantamento jurídico (ex: dado de vítima, segredo de justiça) não estão aqui —
   a tabela `categoria_sigilo` foi desenhada para acomodá-las sem mudança de código, não para já
   cobri-las.
-- **Nível de restrição do documento é regra simples**: atribuído automaticamente por presença de
-  categoria sensível (ver Decisões técnicas) — não reflete uma análise jurídica real de
-  sensibilidade do conteúdo.
+- **Nível de restrição do documento é regra simples, e agressiva na prática**: atribuído
+  automaticamente por presença de categoria sensível (ver Decisões técnicas). Na amostra, isso
+  classificou 69 de 70 documentos como sigilosos — um único CPF/RG em qualquer lugar do documento
+  já basta. Não reflete uma análise jurídica real de sensibilidade do conteúdo; em produção,
+  precisaria de granularidade por trecho/seção, não por documento inteiro.
 - **Gabarito do experimento é semiautomático**: construído com expressões regulares sobre o texto
   já extraído, cada acerto conferido por leitura humana antes de entrar no gabarito — não é uma
   anotação manual completa e independente por múltiplos revisores.
