@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Ambiente / segredos
+.env
+.env.local
+
+# Dados baixados/gerados (regeneraveis via ingestion/) - nao versionar
+ingestion/data/*.pdf
+ingestion/data/*.txt
+ingestion/data/manifest.json
+ingestion/data/extracted/
+ingestion/data/extracted_manifest.json
+
+# Postgres local (docker-compose)
+pgdata/
+
+# Modelos baixados localmente (Ollama gerencia os proprios em ~/.ollama)
+*.gguf
+
+.DS_Store
+*.log

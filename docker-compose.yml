@@ -1,0 +1,32 @@
+# Postgres local com pgvector habilitado - unico servico externo desta PoC.
+# LLM e embeddings rodam localmente via Ollama / sentence-transformers (fora
+# do Docker, direto no host) - ver README para instrucoes.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: realce-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: realce
+      POSTGRES_PASSWORD: realce
+      POSTGRES_DB: realce
+      # Banco 100% local, de uso exclusivo desta PoC, sem dado de acesso
+      # real - trust simplifica a demo (sem gerenciar senha em mais um
+      # lugar). Ver README sobre a porta 5433 (conflito com um Postgres
+      # nativo pre-existente na maquina de desenvolvimento, na 5432).
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      # 5433 (nao 5432) porque ja existe um PostgreSQL nativo no host
+      # ocupando a porta padrao - ver README.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U realce -d realce"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

@@ -1,0 +1,27 @@
+# Ambiente Python unico para ingestion/ e app/ (Secao 5 do brief).
+# Nenhuma dependencia aqui faz chamada a API externa em tempo de uso -
+# Ollama (LLM) e sentence-transformers (embeddings) rodam localmente.
+
+# extracao de PDF
+pdfplumber==0.11.4
+pytesseract==0.3.13
+pdf2image==1.17.0
+
+# fonte de dados (Querido Diario) - so na ingestao, download unico
+requests==2.32.3
+
+# anonimizacao (NER local em portugues + regras)
+spacy==3.7.5
+
+# embeddings locais
+sentence-transformers==3.1.1
+
+# banco local (Postgres + pgvector)
+psycopg[binary]==3.2.3
+pgvector==0.3.5
+
+# backend + demo
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+streamlit==1.38.0
+python-dotenv==1.0.1
