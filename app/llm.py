@@ -1,10 +1,16 @@
 """
-Avaliacao por criterios via LLM local, servido pelo Ollama (Secao 4.4/5).
+Chamada ao LLM local via Ollama (Secao 4.6 do brief, revisao 2).
+
+**Avaliacao atomica**: um criterio por chamada, com instrucao curta - nao
+todos de uma vez. Modelos locais perdem consistencia quando recebem
+varios criterios abstratos numa instrucao longa (comportamento observado
+durante o desenvolvimento desta PoC com prompts multi-criterio - ver
+README). Mais chamadas, porem mais confiavel, e permite atribuir
+acerto/erro a um criterio especifico no feedback (Secao 4.9).
 
 Nenhuma chamada externa: o Ollama roda localmente (`ollama serve`,
 tipicamente em http://localhost:11434) e o modelo e baixado uma unica vez
-(`ollama pull <modelo>`). Ver README para a comparacao entre os modelos
-testados (qwen2.5:7b-instruct vs. llama3.2:3b) e o motivo da escolha final.
+(`ollama pull <modelo>`).
 """
 from __future__ import annotations
 
@@ -20,52 +26,46 @@ load_dotenv()
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct")
 
-Criterio = dict  # {"chave": str, "descricao": str}
-
 # Schema JSON explicito (nao so "format": "json") - sem isso, o Ollama as
-# vezes devolve um objeto solto em vez do array esperado quando o trecho
-# de entrada e ruidoso (ex: tabelas muito fragmentadas), quebrando o
-# parsing. Suportado desde o Ollama 0.5 (structured outputs).
+# vezes devolve texto fora do formato esperado quando o trecho de entrada
+# e ruidoso (ex: tabelas muito fragmentadas). Suportado desde o Ollama 0.5
+# (structured outputs).
 _RESPONSE_SCHEMA = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {
-            "criterio_chave": {"type": "string"},
-            "atende": {"type": "boolean"},
-            "score": {"type": "number"},
-            "justificativa": {"type": "string"},
-            "trecho_citado": {"type": "string"},
-        },
-        "required": ["criterio_chave", "atende", "score", "justificativa", "trecho_citado"],
+    "type": "object",
+    "properties": {
+        "atende": {"type": "boolean"},
+        "score": {"type": "number"},
+        "justificativa": {"type": "string"},
+        "trecho_citado": {"type": "string"},
     },
+    "required": ["atende", "score", "justificativa", "trecho_citado"],
 }
 
 
-def avaliar_criterios(texto_chunk: str, criterios: list[Criterio]) -> list[dict]:
-    """Aplica o conjunto de criterios de relevancia vigente sobre um chunk
-    candidato (Secao 4.4). Retorna uma avaliacao por criterio, com citacao
-    do trecho de origem para rastreabilidade."""
-    lista_criterios = "\n".join(f"- {c['chave']}: {c['descricao']}" for c in criterios)
-
+def avaliar_criterio_unico(texto_chunk: str, criterio_descricao: str) -> dict:
+    """Avalia UM criterio contra um chunk. Retorna
+    {atende, score, justificativa, trecho_citado} (sem validar a citacao -
+    isso e responsabilidade de app/evaluate.py, que tem acesso ao texto
+    original do chunk para comparar)."""
     prompt = f"""Voce e um assistente de analise documental para o Ministerio Publico.
-Avalie o trecho de diario oficial abaixo em relacao a CADA um dos criterios listados.
-Para cada criterio, responda se o trecho atende (true/false), um score de 0 a 1,
-uma justificativa curta, e cite o trecho EXATO (copiado literalmente do texto
-abaixo) que fundamenta a resposta. Se o criterio nao se aplica, use trecho_citado
-como string vazia e atende=false. Alguns nomes proprios podem aparecer mascarados
-como [PESSOA_N] - trate isso normalmente como referencia a uma pessoa fisica.
+Avalie o trecho de diario oficial abaixo em relacao a UM UNICO criterio.
+Responda se o trecho atende ao criterio (true/false), um score de 0 a 1,
+uma justificativa curta, e cite o trecho EXATO (copiado literalmente do
+texto abaixo, sem alterar nenhum caractere) que fundamenta a resposta. Se
+o criterio nao se aplica, use trecho_citado como string vazia e
+atende=false. Nomes proprios podem aparecer mascarados como [PESSOA_A],
+[PESSOA_B] etc - trate cada pseudonimo como referencia a uma pessoa
+fisica distinta.
 
-Criterios:
-{lista_criterios}
+Criterio: {criterio_descricao}
 
 Trecho:
 \"\"\"
 {texto_chunk}
 \"\"\"
 
-Responda APENAS com um JSON array, sem texto adicional, no formato:
-[{{"criterio_chave": "...", "atende": true, "score": 0.0, "justificativa": "...", "trecho_citado": "..."}}]"""
+Responda APENAS com um objeto JSON no formato:
+{{"atende": true, "score": 0.0, "justificativa": "...", "trecho_citado": "..."}}"""
 
     resp = requests.post(
         f"{OLLAMA_URL}/api/generate",
@@ -76,22 +76,20 @@ Responda APENAS com um JSON array, sem texto adicional, no formato:
             "format": _RESPONSE_SCHEMA,
             "options": {"temperature": 0.1},
         },
-        timeout=180,
+        timeout=120,
     )
     resp.raise_for_status()
-    raw = resp.json().get("response", "[]")
+    raw = resp.json().get("response", "{}")
 
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        match = re.search(r"\[[\s\S]*\]", raw)
+        match = re.search(r"\{[\s\S]*\}", raw)
         if not match:
-            return []
+            return {"atende": False, "score": 0.0, "justificativa": "resposta do modelo nao pode ser interpretada", "trecho_citado": ""}
         try:
             parsed = json.loads(match.group(0))
         except json.JSONDecodeError:
-            return []
+            return {"atende": False, "score": 0.0, "justificativa": "resposta do modelo nao pode ser interpretada", "trecho_citado": ""}
 
-    if isinstance(parsed, dict):
-        parsed = [parsed]
-    return parsed if isinstance(parsed, list) else []
+    return parsed if isinstance(parsed, dict) else {"atende": False, "score": 0.0, "justificativa": "", "trecho_citado": ""}
