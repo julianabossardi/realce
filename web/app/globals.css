@@ -1,0 +1,82 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* --- cores (design tokens do handoff, _ds_tokens/colors.css) --- */
+  --red-50: #fbeaec; --red-100: #f5cdd2; --red-200: #e9a2ac; --red-300: #d97583; --red-400: #c24c5c;
+  --red-500: #a93441; --red-600: #8c2836; --red-700: #6e1f2b; --red-800: #521720; --red-900: #390f16;
+  --orange-50: #fdf0e4; --orange-100: #fad9bb; --orange-200: #f2b688; --orange-300: #e89355; --orange-400: #dc7530;
+  --orange-500: #c6631f; --orange-600: #a34f17; --orange-700: #7e3d12; --orange-800: #5c2c0e; --orange-900: #3b1c09;
+  --amber-100: #faecd2; --amber-300: #e8b768; --amber-500: #c9861f; --amber-700: #8f5f13;
+  --green-100: #dcece3; --green-300: #7fb89a; --green-500: #2f7d5c; --green-700: #1f5540;
+  --neutral-0: #ffffff; --neutral-50: #f7f5f3; --neutral-100: #efebe7; --neutral-200: #ddd7d1;
+  --neutral-300: #c2bab2; --neutral-400: #9c9289; --neutral-500: #78706a; --neutral-600: #5b5450;
+  --neutral-700: #423d39; --neutral-800: #2b2724; --neutral-900: #1c1815;
+
+  --color-brand-primary: var(--orange-600);
+  --color-brand-primary-hover: var(--orange-700);
+  --color-brand-primary-active: var(--orange-800);
+
+  --surface-page: var(--neutral-50);
+  --surface-card: var(--neutral-0);
+  --surface-sunken: var(--neutral-100);
+  --surface-overlay: rgba(28, 24, 21, .48);
+  --surface-inverse: var(--neutral-900);
+
+  --border-subtle: var(--neutral-200);
+  --border-default: var(--neutral-300);
+  --border-strong: var(--neutral-400);
+
+  --text-primary: var(--neutral-900);
+  --text-secondary: var(--neutral-600);
+  --text-tertiary: var(--neutral-400);
+  --text-on-brand: var(--neutral-0);
+  --text-link: var(--orange-600);
+  --text-link-hover: var(--orange-700);
+
+  --priority-urgent: #ffffff; --priority-urgent-bg: var(--red-600);
+  --priority-high: #ffffff; --priority-high-bg: var(--orange-800);
+  --priority-medium: var(--orange-700); --priority-medium-bg: var(--orange-100);
+  --priority-low: var(--neutral-500); --priority-low-bg: var(--neutral-100);
+
+  --status-success: var(--green-500); --status-success-bg: var(--green-100);
+  --status-warning: var(--orange-700); --status-warning-bg: var(--orange-100);
+  --status-danger: var(--red-600); --status-danger-bg: var(--red-50);
+  --status-info: var(--orange-600); --status-info-bg: var(--orange-50);
+  --focus-ring: var(--orange-400);
+
+  /* --- tipografia --- */
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  /* --- espaçamento / raios --- */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px;
+  --space-6: 24px; --space-8: 32px; --space-10: 40px; --space-12: 48px; --space-16: 64px; --space-20: 80px;
+  --radius-xs: 4px; --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px; --radius-xl: 16px; --radius-pill: 999px;
+
+  /* --- efeitos --- */
+  --shadow-sm: 0 1px 2px rgba(28, 24, 21, .06), 0 1px 1px rgba(28, 24, 21, .04);
+  --shadow-md: 0 4px 12px rgba(28, 24, 21, .08), 0 1px 2px rgba(28, 24, 21, .05);
+  --shadow-lg: 0 12px 32px rgba(28, 24, 21, .12), 0 2px 6px rgba(28, 24, 21, .06);
+  --shadow-focus: 0 0 0 3px rgba(198, 99, 31, .35);
+  --gradient-glass-dark: linear-gradient(120deg, #1c1815 0%, #3b1c09 30%, #7e3d12 52%, #521720 78%, #1c1815 100%);
+  --ease-standard: cubic-bezier(.4, 0, .2, 1);
+  --duration-base: 180ms;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  background: var(--surface-page);
+}
+a { color: var(--text-link); }
+a:hover { color: var(--text-link-hover); }
+button { font-family: inherit; }
+input, select { font-family: inherit; }
+
+@keyframes realce-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--neutral-300); border-radius: 6px; }

@@ -7,7 +7,8 @@ Roda 100% local; a unica dependencia externa e o Postgres local
 """
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.access import desmascarar_texto, documento_visivel, registrar_auditoria, tem_clearance
@@ -16,6 +17,18 @@ from app.evaluate import avaliar_chunk, criterios_ativos
 from app.search import buscar
 
 app = FastAPI(title="Realce - PoC (100% local, busca hibrida)")
+
+# CORS liberado (GET/POST de qualquer origem) - necessario porque o
+# frontend passa a rodar no Vercel (origem diferente), chamando este
+# backend local via tunel. Aceitavel para esta demo (dado publico,
+# service local so acessivel via URL efemera do tunel); nao seria a
+# configuracao de producao (ver README).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class BuscaRequest(BaseModel):
@@ -171,6 +184,270 @@ def feedback_stats():
                 """
             )
             return {"stats": cur.fetchall()}
+    finally:
+        conn.close()
+
+
+class CasoCreateRequest(BaseModel):
+    nome: str = "Novo caso"
+    numero_processo: str | None = None
+
+
+class CasoRenameRequest(BaseModel):
+    nome: str
+
+
+class DossieAddRequest(BaseModel):
+    chunk_id: str
+    tema: str | None = None
+
+
+class DossieNotaRequest(BaseModel):
+    nota: str
+
+
+class AvaliacaoRelevanciaRequest(BaseModel):
+    chunk_id: str
+    relevante: bool | None  # None = remove a avaliacao (toggle)
+
+
+@app.get("/casos")
+def listar_casos():
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("select id, nome, numero_processo, criado_em from casos order by criado_em")
+            return {"casos": cur.fetchall()}
+    finally:
+        conn.close()
+
+
+@app.post("/casos")
+def criar_caso(req: CasoCreateRequest):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("select count(*) as total from casos")
+            if cur.fetchone()["total"] >= 10:
+                raise HTTPException(400, "Limite de 10 casos abertos simultaneamente.")
+            cur.execute(
+                "insert into casos (nome, numero_processo) values (%s, %s) returning id, nome, numero_processo, criado_em",
+                (req.nome, req.numero_processo),
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+@app.patch("/casos/{caso_id}")
+def renomear_caso(caso_id: str, req: CasoRenameRequest):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "update casos set nome = %s, atualizado_em = now() where id = %s returning id, nome, numero_processo",
+                (req.nome.strip() or "Novo caso", caso_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Caso nao encontrado.")
+            return row
+    finally:
+        conn.close()
+
+
+@app.get("/casos/{caso_id}/dossie")
+def listar_dossie(caso_id: str):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                select di.id, di.chunk_id, di.nota, di.tema, di.criado_em,
+                       c.texto, c.pagina, d.arquivo_local, d.municipio, d.data_publicacao, d.url_origem
+                from dossie_items di
+                join chunks c on c.id = di.chunk_id
+                join documentos d on d.id = c.documento_id
+                where di.caso_id = %s
+                order by di.criado_em
+                """,
+                (caso_id,),
+            )
+            return {"itens": cur.fetchall()}
+    finally:
+        conn.close()
+
+
+@app.post("/casos/{caso_id}/dossie")
+def adicionar_ao_dossie(caso_id: str, req: DossieAddRequest):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                insert into dossie_items (caso_id, chunk_id, tema) values (%s, %s, %s)
+                on conflict (caso_id, chunk_id) do nothing
+                returning id
+                """,
+                (caso_id, req.chunk_id, req.tema),
+            )
+            row = cur.fetchone()
+        return {"ok": True, "id": row["id"] if row else None, "ja_existia": row is None}
+    finally:
+        conn.close()
+
+
+@app.delete("/casos/{caso_id}/dossie/{chunk_id}")
+def remover_do_dossie(caso_id: str, chunk_id: str):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "delete from dossie_items where caso_id = %s and chunk_id = %s",
+                (caso_id, chunk_id),
+            )
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.patch("/casos/{caso_id}/dossie/{chunk_id}")
+def anotar_dossie(caso_id: str, chunk_id: str, req: DossieNotaRequest):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "update dossie_items set nota = %s where caso_id = %s and chunk_id = %s returning id",
+                (req.nota, caso_id, chunk_id),
+            )
+            if not cur.fetchone():
+                raise HTTPException(404, "Item nao encontrado no dossie.")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.post("/casos/{caso_id}/avaliacao-relevancia")
+def avaliar_relevancia(caso_id: str, req: AvaliacaoRelevanciaRequest):
+    """👍/👎 do analista sobre um trecho, no contexto de um caso - distinto
+    da avaliacao por criterio (LLM); esta e humana, exibida so no painel de
+    detalhe (Secao 'Interactions' do handoff de design)."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            if req.relevante is None:
+                cur.execute(
+                    "delete from avaliacoes_relevancia where caso_id = %s and chunk_id = %s",
+                    (caso_id, req.chunk_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    insert into avaliacoes_relevancia (caso_id, chunk_id, relevante)
+                    values (%s, %s, %s)
+                    on conflict (caso_id, chunk_id) do update set relevante = excluded.relevante
+                    """,
+                    (caso_id, req.chunk_id, req.relevante),
+                )
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/casos/{caso_id}/avaliacoes")
+def listar_avaliacoes_relevancia(caso_id: str):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "select chunk_id, relevante from avaliacoes_relevancia where caso_id = %s",
+                (caso_id,),
+            )
+            return {"avaliacoes": cur.fetchall()}
+    finally:
+        conn.close()
+
+
+@app.get("/acervo")
+def listar_acervo(q: str | None = None, tipo: str | None = None, limite: int = 200):
+    """Navegacao livre pelo acervo, sem priorizacao por IA (Secao 4.4 do
+    handoff: visibilidade total, distinta da busca priorizada)."""
+    conn = get_connection()
+    try:
+        condicoes = []
+        params: list = []
+        if q:
+            condicoes.append("(d.arquivo_local ilike %s or d.municipio ilike %s)")
+            params.extend([f"%{q}%", f"%{q}%"])
+        if tipo:
+            condicoes.append("d.tipo_documento = %s")
+            params.append(tipo)
+        where_sql = ("where " + " and ".join(condicoes)) if condicoes else ""
+
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                select d.id, d.arquivo_local, d.municipio, d.tipo_documento,
+                       d.data_publicacao, d.url_origem, d.nivel_restricao, 'Processado' as status
+                from documentos d
+                {where_sql}
+                order by d.data_publicacao desc nulls last
+                limit %s
+                """,
+                (*params, limite),
+            )
+            processados = cur.fetchall()
+
+            cur.execute(
+                "select arquivo_local, municipio, tipo_erro, mensagem_erro from quarentena order by criado_em desc limit %s",
+                (limite,),
+            )
+            nao_processados = cur.fetchall()
+
+        return {"documentos": processados, "nao_processados": nao_processados}
+    finally:
+        conn.close()
+
+
+@app.get("/documentos/{documento_id}/completo")
+def documento_completo(documento_id: str, perfil: str = "sem_clearance"):
+    """Texto integral do documento (concatenacao dos chunks, na ordem),
+    aplicando as mesmas regras de mascaramento/auditoria da busca."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "select id, arquivo_local, municipio, tipo_documento, data_publicacao, url_origem, nivel_restricao "
+                "from documentos where id = %s",
+                (documento_id,),
+            )
+            doc = cur.fetchone()
+            if not doc:
+                raise HTTPException(404, "Documento nao encontrado.")
+            if not documento_visivel(doc["nivel_restricao"], perfil):
+                raise HTTPException(403, "Documento sigiloso - perfil sem clearance.")
+
+            cur.execute(
+                "select id, indice, pagina, texto from chunks where documento_id = %s order by indice",
+                (documento_id,),
+            )
+            chunks = cur.fetchall()
+
+        entidades: list[dict] = []
+        if tem_clearance(perfil):
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select pseudonimo, valor_original from entidades_mascaradas where documento_id = %s",
+                    (documento_id,),
+                )
+                entidades = cur.fetchall()
+
+        texto_completo = "\n\n".join(c["texto"] for c in chunks)
+        if tem_clearance(perfil) and entidades:
+            texto_completo = desmascarar_texto(texto_completo, entidades)
+            registrar_auditoria(conn, perfil, documento_id, [e["pseudonimo"] for e in entidades])
+
+        return {**doc, "texto_completo": texto_completo, "num_chunks": len(chunks)}
     finally:
         conn.close()
 

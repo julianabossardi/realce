@@ -5,14 +5,18 @@ completo: **a combinação de busca léxica e busca semântica, seguida de avali
 LLM local, recupera documentos relevantes com recall e precisão superiores aos de cada método de
 busca isolado.**
 
-Arquitetura **100% local**: banco (Postgres + pgvector via Docker), modelo de embeddings
+**Backend 100% local**: banco (Postgres + pgvector via Docker), modelo de embeddings
 (sentence-transformers) e LLM de avaliação (Ollama) rodam todos no computador de quem executa —
 nenhuma chamada de API externa acontece durante o uso normal do sistema. O único tráfego de rede é
 o download inicial dos pesos dos modelos (uma vez) e a ingestão inicial dos PDFs do Querido Diário.
+Um **frontend novo (Next.js, `web/`)**, implementando o handoff de design recebido, roda publicado
+no Vercel — ver [Revisão 3](#revisão-3--frontend-novo-e-deploy-hibrido-vercel--backend-local) para
+como essa peça se conecta ao backend local sem abrir mão da arquitetura 100% local dele.
 
 ## Sumário
 
-- [O que mudou nesta revisão](#o-que-mudou-nesta-revisão)
+- [Revisão 3 — frontend novo e deploy híbrido](#revisão-3--frontend-novo-e-deploy-hibrido-vercel--backend-local)
+- [O que mudou na revisão 2](#o-que-mudou-nesta-revisão)
 - [Setup e reprodução](#setup-e-reprodução)
 - [O que foi feito do zero / com IA / reaproveitado](#o-que-foi-feito-do-zero--com-ia--reaproveitado)
 - [Decisões técnicas](#decisões-técnicas)
@@ -20,6 +24,100 @@ o download inicial dos pesos dos modelos (uma vez) e a ingestão inicial dos PDF
 - [Limitações conhecidas](#limitações-conhecidas)
 - [Riscos e evolução para produção](#riscos-e-evolução-para-produção)
 - [Fora de escopo](#fora-de-escopo-desta-poc)
+
+---
+
+## Revisão 3 — frontend novo e deploy híbrido (Vercel + backend local)
+
+Um handoff de design (`design_handoff_realce_busca_documentos/`) pediu uma interface rica —
+sidebar de casos, busca priorizada em 3 painéis, dossiê, acervo, documento completo — que não cabe
+no Streamlit da PoC original. Isso trouxe duas mudanças:
+
+**1. Frontend novo em `web/` (Next.js + React), substituindo o Streamlit como interface principal.**
+Implementa os 7 estados descritos no handoff (Home, Busca, Acervo, Painel de detalhe, Dossiê,
+Documento completo, Sidebar de casos), usando os design tokens fornecidos
+(`_ds_tokens/colors.css`, `typography.css`, `spacing.css`, `effects.css`). `app/demo_ui.py`
+(Streamlit) continua no repositório como interface alternativa mais simples de rodar sem Node.
+
+**2. Duas tabelas novas no Postgres local** (`db/migrations/0005_casos_dossie.sql`), exigidas pelo
+handoff e sem equivalente na revisão anterior: `casos` (casos abertos pelo analista) e
+`dossie_items` (trechos salvos por caso, com anotação). Uma terceira, `avaliacoes_relevancia`,
+registra o 👍/👎 humano por trecho **no contexto de um caso** — distinto da avaliação por critério
+(LLM), que já existia. `app/main.py` ganhou os endpoints CRUD correspondentes
+(`/casos`, `/casos/{id}/dossie`, `/casos/{id}/avaliacao-relevancia`, `/acervo`,
+`/documentos/{id}/completo`) e CORS liberado (`allow_origins=["*"]`), necessário porque o frontend
+passa a rodar numa origem diferente do backend.
+
+### O conflito real: Vercel é serverless, Ollama não é
+
+Funções serverless do Vercel não seguram um processo `ollama serve` rodando, e recarregar o modelo
+de embeddings local (~2GB) a cada cold start não é viável. **Vercel e "LLM/embeddings 100% local"
+são incompatíveis na mesma peça de infraestrutura.** Havia três saídas: (a) reescrever
+embeddings/avaliação para APIs cloud (Voyage + Claude) — reverteria a decisão de arquitetura já
+tomada nas revisões anteriores; (b) desistir do Vercel e ficar só local; (c) publicar **só o
+frontend** no Vercel, apontando para o backend local exposto por um túnel público. A pessoa
+responsável pelo projeto escolheu (c) — mantém Ollama/embeddings genuinamente locais, ao custo de o
+link público só funcionar enquanto o Mac que roda o backend estiver ligado.
+
+**Link atual**: https://web-julianabossardi-8591s-projects.vercel.app — só responde de verdade
+(busca funcionando) enquanto o backend local + túnel estiverem no ar na máquina de quem
+desenvolveu. Fora isso, a interface carrega mas as chamadas à API falham.
+
+### Como está montado
+
+```
+[Vercel: web/ (Next.js)]  --HTTPS-->  [cloudflared tunnel]  -->  [localhost:8000 (FastAPI)]
+                                                                        |
+                                                          Postgres local + Ollama local
+```
+
+- `web/` publicado no Vercel (conta pessoal, não a mesma usada em outros projetos — ver nota
+  abaixo), com a variável `NEXT_PUBLIC_API_URL` apontando para a URL do túnel.
+- Backend local exposto via `cloudflared tunnel --url http://localhost:8000` (quick tunnel, sem
+  conta Cloudflare — `brew install cloudflared`).
+- `app/main.py` ganhou CORS liberado para aceitar chamadas vindas do domínio do Vercel.
+
+**Isso é uma montagem de demonstração, não uma arquitetura de produção** — documentado
+explicitamente como tal:
+
+- **A URL do túnel é efêmera.** Cada vez que `cloudflared` reinicia (Mac dorme, rede cai, o
+  processo é encerrado), a URL muda e a variável de ambiente no Vercel precisa ser atualizada e o
+  frontend, re-implantado. Isso aconteceu durante o próprio desenvolvimento desta revisão — o
+  túnel caiu uma vez em poucos minutos de uso (`context canceled` nos logs do cloudflared), exigindo
+  reinício manual.
+- **O link só serve enquanto o Mac estiver ligado, com Docker/Ollama/`uvicorn`/`cloudflared`
+  rodando.** Não é um serviço 24/7.
+- **Domínios `trycloudflare.com` são bloqueados por alguns bloqueadores/extensões de segurança do
+  navegador** (heurística comum contra abuso de túneis efêmeros) — confirmado durante o próprio
+  desenvolvimento, quando o navegador usado para testar a interface bloqueou a chamada de rede
+  para o túnel (`ERR_BLOCKED_BY_CLIENT`) enquanto `curl` direto funcionava normalmente. Um visitante
+  real com um bloqueador agressivo pode ver a busca falhar silenciosamente.
+- **CORS liberado para qualquer origem** (`allow_origins=["*"]`) — aceitável para esta demo (dado
+  público, backend só acessível via URL efêmera do túnel), não seria a configuração de produção.
+
+### Conta Vercel usada — nota sobre o processo, não sobre arquitetura
+
+A CLI do Vercel já estava autenticada (login prévio, de outro projeto não relacionado ao MPRJ) numa
+conta de equipe que não permite escopo pessoal e tinha *Deployment Protection* (SSO) ligada por
+padrão — o link ficava redirecionando para login em vez de abrir a página. Foi feito login numa
+conta pessoal separada (`julianabossardi`, via GitHub) especificamente para este projeto, e a
+proteção SSO foi desativada no projeto (`vercel project protection disable web --sso`) para o link
+poder ser compartilhado sem exigir login na Vercel de quem for abrir. Projeto e Supabase de uma
+tentativa anterior desta mesma sessão (antes de se decidir por manter o backend local) foram
+pausados, não usados — ver histórico de commits.
+
+### O que foi reaproveitado do handoff de design vs. adaptado
+
+- **Reaproveitado literalmente**: paleta de cores, tipografia (Inter/JetBrains Mono), espaçamento,
+  raios de borda, sombras — copiados de `_ds_tokens/*.css` para `web/app/globals.css` como
+  variáveis CSS, sem alteração de valores.
+- **Adaptado**: o protótipo revela cada dado mascarado individualmente, por clique, com timestamp
+  por revelação (`toggleReveal` no protótipo). O backend desta PoC desmascara o chunk **inteiro**
+  de uma vez, condicionado ao perfil (não por entidade individual) — o frontend reflete isso
+  mostrando o texto já revelado por completo quando o perfil tem clearance, em vez de um clique por
+  máscara. Documentado como simplificação, não como o comportamento final desejado.
+- **Não implementado** (o próprio handoff já marca como fora do fluxo principal): exportar dossiê
+  (botão desabilitado, como no protótipo); anexar documentos de apoio (idem).
 
 ---
 
@@ -78,13 +176,45 @@ python ingestion/index.py                   # anonimização + metadados + chunk
 
 # 6. Backend + demo
 uvicorn app.main:app --reload --port 8000
-streamlit run app/demo_ui.py                # em outro terminal
+streamlit run app/demo_ui.py                # em outro terminal, interface alternativa simples
+
+# 7. Frontend novo (Next.js, revisão 3) - em outro terminal
+cd web
+npm install
+echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
+npm run dev                                 # http://localhost:3000
 ```
 
 Para rodar a avaliação da hipótese (Seção 5, o principal artefato de comparação):
 
 ```bash
 python experiments/compare_modes.py
+```
+
+### Nota sobre migrations adicionadas depois do primeiro `docker compose up`
+
+`db/migrations/0005_casos_dossie.sql` (tabelas `casos`/`dossie_items`/`avaliacoes_relevancia`,
+revisão 3) foi adicionada depois do primeiro `docker compose up -d` desta instalação. Postgres só
+roda os arquivos de `/docker-entrypoint-initdb.d` na **primeira** inicialização de um volume vazio
+— quem já tinha o banco rodando precisa aplicar essa migration manualmente:
+
+```bash
+docker exec -i realce-db psql -U realce -d realce < db/migrations/0005_casos_dossie.sql
+```
+
+Uma instalação nova (`docker compose up -d` num volume vazio) já roda todas as migrations,
+incluindo a 0005, automaticamente.
+
+### Publicar o frontend (deploy híbrido - ver Revisão 3 para o porquê)
+
+```bash
+# expor o backend local publicamente (URL muda a cada reinício)
+cloudflared tunnel --url http://localhost:8000
+
+# apontar o frontend para essa URL e publicar
+cd web
+vercel env add NEXT_PUBLIC_API_URL production   # cole a URL do tunel
+vercel --prod
 ```
 
 ### Nota sobre a porta do Postgres
@@ -111,6 +241,10 @@ porta 5433 continua funcionando normalmente — só ajuste `DATABASE_URL` se pre
 - API pública do [Querido Diário](https://github.com/okfn-brasil/querido-diario) (fonte de dados)
 - *Reciprocal Rank Fusion* (RRF) — técnica de fusão de rankings publicada (Cormack et al., 2009),
   implementada aqui em ~15 linhas de Python (`app/search.py`), sem biblioteca externa
+- `Next.js`, `React`, `lucide-react` (ícones) — infraestrutura do frontend novo (`web/`)
+- `cloudflared` (Cloudflare Tunnel) — expõe o backend local publicamente para o deploy híbrido
+- design tokens (cores/tipografia/espaçamento/efeitos) do handoff de design recebido
+  (`_ds_tokens/*.css`), copiados sem alteração de valores
 
 **Gerado com apoio do Claude Code (implementação assistida por IA), revisado manualmente:**
 Todo o código deste repositório (`app/`, `ingestion/`, `db/migrations/`, `experiments/`) foi
@@ -129,6 +263,16 @@ ativa durante a sessão (não só geração direta):
 - a correção do import incorreto de `PDFSyntaxError` ao implementar a fila de quarentena (a
   exceção real vem de `pdfminer.pdfparser`, não de `pdf2image.exceptions` — mesmo nome de classe,
   módulos diferentes; descoberto testando com um PDF corrompido sintético)
+- todo o frontend (`web/`), reimplementando os 7 estados do handoff de design em React/Next.js a
+  partir do protótipo HTML e da documentação de handoff (`design_handoff_realce_busca_documentos/`)
+- o diagnóstico e resolução do deploy no Vercel: descoberta de que a CLI estava autenticada numa
+  conta de equipe sem escopo pessoal e com *Deployment Protection* (SSO) ativa por padrão
+  (bloqueava o link com redirect de login); resolvido com login em conta separada e
+  `vercel project protection disable`
+- o diagnóstico de que o túnel cloudflared caiu durante os próprios testes (`context canceled` nos
+  logs) e de que o navegador de teste bloqueava o domínio `trycloudflare.com`
+  (`ERR_BLOCKED_BY_CLIENT`) mesmo com o túnel saudável — confirmado comparando `curl` direto
+  (funcionava) com a chamada feita pelo navegador (bloqueada)
 - o experimento (`experiments/compare_modes.py`) estourou timeout de 600s na primeira tentativa —
   o endpoint `/search` chamava avaliação por critério (LLM) sobre todo candidato em toda busca,
   então medir 3 modos × 7 perguntas significava até `limite × critérios ativos` avaliações por

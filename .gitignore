@@ -24,3 +24,8 @@ pgdata/
 
 .DS_Store
 *.log
+
+# Frontend (web/)
+web/node_modules/
+web/.next/
+web/.vercel/
