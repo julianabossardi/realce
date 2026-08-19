@@ -106,6 +106,16 @@ def _anexar_documentos_e_avaliar(conn, chunks: list[dict], perfil: str, avaliar:
                 "score_criterios": max((a["score"] for a in avaliacoes), default=0.0),
             }
         )
+
+    if avaliar:
+        # busca priorizada (Secao 4.6): a ordem de recuperacao (RRF/lexico/
+        # vetorial) nao e a ordem de relevancia - reordena pelo score da
+        # avaliacao por criterio, que e o que a interface chama de
+        # "priorizacao por IA". Sort estavel: em empate, mantem a ordem de
+        # recuperacao original. Com avaliar=False, score_criterios e 0.0
+        # para todos e o sort vira um no-op (preserva ordem de retrieval,
+        # como antes).
+        resultado.sort(key=lambda r: r["score_criterios"], reverse=True)
     return resultado
 
 
@@ -268,7 +278,8 @@ def listar_dossie(caso_id: str):
             cur.execute(
                 """
                 select di.id, di.chunk_id, di.nota, di.tema, di.criado_em,
-                       c.texto, c.pagina, d.arquivo_local, d.municipio, d.data_publicacao, d.url_origem
+                       c.texto, c.pagina, d.arquivo_local, d.municipio, d.data_publicacao, d.url_origem,
+                       d.titulo, d.tipo_documento
                 from dossie_items di
                 join chunks c on c.id = di.chunk_id
                 join documentos d on d.id = c.documento_id

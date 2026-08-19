@@ -12,10 +12,16 @@ import type { AcervoDoc, AcervoNaoProcessado, Caso, DossieItem, ModoBusca, Perfi
 
 type View = "home" | "busca" | "acervo";
 
+// Validadas contra a amostra atual (30 documentos, Niterói + Angra dos
+// Reis - ver README, Revisão 4) em experiments/compare_modes.py: as três
+// abaixo têm recall/precisão mais altos no modo híbrido dessa amostra
+// específica. Reduzir a amostra de 70 para 30 documentos invalidou os
+// exemplos anteriores (buscavam temas concentrados em documentos que
+// saíram da amostra) - reavaliar esta lista se a amostra mudar de novo.
 const EXEMPLOS = [
-  "Servidores nomeados para cargo em comissão",
-  "Contratações por dispensa de licitação",
-  "Readaptação funcional de servidores",
+  "Existem processos de readaptação funcional de servidores?",
+  "Portaria nº 1003/2026",
+  "Elizabete Mocaiber Freire",
 ];
 
 const MODOS: { value: ModoBusca; label: string }[] = [
@@ -28,7 +34,13 @@ export default function Page() {
   const [view, setView] = useState<View>("home");
   const [casos, setCasos] = useState<Caso[]>([]);
   const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
-  const [perfil, setPerfil] = useState<Perfil>("sem_clearance");
+  // Padrao "com_clearance" (Autorizado): com a amostra reduzida a 30
+  // documentos, dos quais metade nasce classificada como sigilosa (ver
+  // README - regra binaria "tem CPF/RG -> sigiloso"), o perfil sem
+  // clearance escondia metade do acervo por padrao e a demonstracao
+  // parecia "sem resultado". O seletor continua existindo no topo da tela
+  // para simular a troca de perfil - só o estado inicial mudou.
+  const [perfil, setPerfil] = useState<Perfil>("com_clearance");
 
   const [searchInput, setSearchInput] = useState("");
   const [query, setQuery] = useState("");
@@ -317,7 +329,7 @@ export default function Page() {
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                       {dossieItems.slice(0, 3).map((it) => (
                         <div key={it.id} style={{ border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-md)", padding: "10px 12px", background: "var(--neutral-0)" }}>
-                          <div style={{ fontSize: 12, color: "var(--orange-700)" }}>{it.arquivo_local}</div>
+                          <div style={{ fontSize: 12, color: "var(--orange-700)" }}>{it.titulo || it.arquivo_local}</div>
                           <div style={{ fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>{it.texto.slice(0, 100)}</div>
                         </div>
                       ))}

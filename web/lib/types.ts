@@ -49,6 +49,8 @@ export type DossieItem = {
   municipio: string;
   data_publicacao: string;
   url_origem: string;
+  titulo: string | null;
+  tipo_documento: string | null;
 };
 
 export type AcervoDoc = {

@@ -65,7 +65,7 @@ export function DossieDrawer({
             <div key={it.id} style={{ border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-md)", padding: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
                 <div style={{ fontSize: 12, color: "var(--orange-700)" }}>
-                  {it.arquivo_local} · {it.data_publicacao}
+                  {it.titulo || it.arquivo_local} · {it.data_publicacao}
                 </div>
                 <button
                   onClick={() => onRemove(it.chunk_id)}

@@ -1,5 +1,6 @@
 "use client";
 
+import { rotuloCriterio } from "@/lib/criterios";
 import { resumoDe } from "@/lib/resumo";
 import type { ResultadoBusca } from "@/lib/types";
 
@@ -98,7 +99,7 @@ export function ResultCard({
                 color: "var(--text-primary)",
               }}
             >
-              {c.criterio_chave}
+              {rotuloCriterio(c.criterio_chave)}
             </span>
           ))}
         </div>

@@ -2,6 +2,7 @@
 
 import { BookmarkCheck, ChevronDown, ChevronUp, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { useState } from "react";
+import { rotuloCriterio } from "@/lib/criterios";
 import { renderTextoComMascara } from "@/lib/mask";
 import { resumoDe } from "@/lib/resumo";
 import type { ResultadoBusca } from "@/lib/types";
@@ -50,7 +51,7 @@ export function DetailPanel({
       >
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
-            {r.arquivo_local} · {r.data_publicacao}
+            {r.tipo_documento || "Documento"} · {r.municipio} · {r.data_publicacao}
             {r.pagina ? ` · p. ${r.pagina}` : ""}
           </div>
           <div
@@ -133,7 +134,7 @@ export function DetailPanel({
                 style={{ border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-md)", padding: "10px 12px" }}
               >
                 <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)", marginBottom: 3 }}>
-                  {c.criterio_chave} {c.atende ? "✓" : "—"}
+                  {rotuloCriterio(c.criterio_chave)} {c.atende ? "✓" : "—"}
                   {!c.citacao_verificada && c.trecho_citado ? (
                     <span title="Citação não confirmada literalmente no texto" style={{ color: "var(--status-warning)" }}>
                       {" "}
