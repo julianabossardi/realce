@@ -3,6 +3,7 @@
 import { BookmarkCheck, ChevronDown, ChevronUp, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { useState } from "react";
 import { renderTextoComMascara } from "@/lib/mask";
+import { resumoDe } from "@/lib/resumo";
 import type { ResultadoBusca } from "@/lib/types";
 
 export function DetailPanel({
@@ -23,7 +24,7 @@ export function DetailPanel({
   onOpenFullDoc: () => void;
 }) {
   const [rastreabilidadeOpen, setRastreabilidadeOpen] = useState(false);
-  const title = r.texto.slice(0, 140).trim() + (r.texto.length > 140 ? "…" : "");
+  const title = resumoDe(r.texto);
 
   return (
     <div

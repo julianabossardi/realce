@@ -119,6 +119,39 @@ pausados, não usados — ver histórico de commits.
 - **Não implementado** (o próprio handoff já marca como fora do fluxo principal): exportar dossiê
   (botão desabilitado, como no protótipo); anexar documentos de apoio (idem).
 
+### Bugs encontrados após o deploy e correções
+
+Depois do primeiro deploy, testes reais no frontend publicado (não só via `curl`) expuseram três
+problemas:
+
+- **Busca não retornava nada, mesmo para termos básicos.** A causa raiz não estava na busca em
+  si: o padrão regex de RG usado para classificar `categoria_sigilo`
+  (`\d{1,2}\.\d{3}\.\d{3}-?[\dXx]?`, sem word boundaries e com sufixo opcional) também casava com
+  códigos de dotação orçamentária municipal, que têm o mesmo formato dígito.dígito.dígito. Uma
+  auditoria retroativa encontrou 3337 falsos positivos em 3426 entidades marcadas como RG, o que
+  havia classificado 69 dos 70 documentos como `sigiloso` — e o perfil padrão do frontend
+  (`sem_clearance`) esconde documentos sigilosos por completo, tanto da busca quanto da leitura
+  completa. Corrigido com um padrão mais estrito (`\b\d{1,2}\.\d{3}\.\d{3}-[\dXx]\b`, exige o
+  dígito verificador e word boundaries — ver `db/migrations/0006_fix_rg_regex.sql`), um script
+  único que restaurou o texto dos 3337 spans mascarados incorretamente e recalculou
+  `nivel_restricao` para todos os documentos (distribuição corrigida: 25 sigiloso / 45 restrito /
+  0 público).
+- **Clicar em um card no "Explorar acervo" não carregava os detalhes.** Mesma causa raiz do item
+  acima: a maioria dos documentos estava indevidamente `sigiloso`, então a chamada a
+  `/documentos/{id}/completo` retornava 403 e a UI não distinguia esse caso de uma falha genérica
+  — o modal parecia simplesmente não abrir. Corrigido em duas partes: (1) o bug de dados acima; (2)
+  `openFullDoc`/`openFullDocFromAcervo` (`web/app/page.tsx`) agora detectam a resposta 403 e
+  mostram uma mensagem explícita ("Documento sigiloso. Troque para o perfil 'Autorizado'…") em vez
+  de um erro genérico — para os casos, bem mais raros agora, em que o documento é legitimamente
+  sigiloso.
+- **Título do card de resultado era um corte cru dos primeiros caracteres do trecho**, o que às
+  vezes começava no meio de uma linha de assinatura (`____________`) ou de uma tabela, dificultando
+  identificar o documento à primeira vista. Adicionada uma heurística simples sem LLM
+  (`web/lib/resumo.ts`, função `resumoDe`) que pula linhas vazias, cabeçalhos de tabela e linhas
+  dominadas por pontuação/sublinhado, preferindo a primeira linha com conteúdo real do próprio
+  chunk — não é uma síntese semântica do documento inteiro (exigiria um LLM por resultado), só uma
+  seleção melhor do que os primeiros N caracteres crus.
+
 ---
 
 ## O que mudou nesta revisão

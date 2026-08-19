@@ -7,11 +7,13 @@ export function FullDocModal({
   titulo,
   texto,
   carregando,
+  erro,
   onClose,
 }: {
   titulo: string;
   texto: string | null;
   carregando: boolean;
+  erro?: string;
   onClose: () => void;
 }) {
   return (
@@ -38,7 +40,7 @@ export function FullDocModal({
           </button>
         </div>
         <div style={{ padding: 24, overflowY: "auto", fontSize: 15, lineHeight: 1.7, color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>
-          {carregando ? "Carregando…" : texto ? renderTextoComMascara(texto) : "Não foi possível carregar o documento."}
+          {carregando ? "Carregando…" : texto ? renderTextoComMascara(texto) : erro || "Não foi possível carregar o documento."}
         </div>
       </div>
     </div>

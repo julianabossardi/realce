@@ -1,5 +1,6 @@
 "use client";
 
+import { resumoDe } from "@/lib/resumo";
 import type { ResultadoBusca } from "@/lib/types";
 
 export function scoreTier(r: ResultadoBusca): { label: string; bg: string; color: string } {
@@ -24,7 +25,7 @@ export function ResultCard({
 }) {
   const tier = scoreTier(r);
   const criteriosAtendidos = r.avaliacoes.filter((a) => a.atende).slice(0, 2);
-  const summary = r.texto.slice(0, 140).trim() + (r.texto.length > 140 ? "…" : "");
+  const summary = resumoDe(r.texto);
 
   return (
     <div
