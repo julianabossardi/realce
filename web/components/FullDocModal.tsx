@@ -5,12 +5,14 @@ import { renderTextoComMascara } from "@/lib/mask";
 
 export function FullDocModal({
   titulo,
+  sintese,
   texto,
   carregando,
   erro,
   onClose,
 }: {
   titulo: string;
+  sintese?: string | null;
   texto: string | null;
   carregando: boolean;
   erro?: string;
@@ -33,9 +35,14 @@ export function FullDocModal({
           overflow: "hidden",
         }}
       >
-        <div style={{ padding: "18px 24px", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 17, color: "var(--text-primary)" }}>{titulo}</div>
-          <button onClick={onClose} aria-label="Fechar" style={{ width: 34, height: 34, borderRadius: "var(--radius-sm)", border: "1px solid var(--border-default)", background: "var(--neutral-0)", cursor: "pointer" }}>
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 17, color: "var(--text-primary)" }}>{titulo}</div>
+            {sintese && (
+              <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 6, lineHeight: 1.5 }}>{sintese}</div>
+            )}
+          </div>
+          <button onClick={onClose} aria-label="Fechar" style={{ flexShrink: 0, width: 34, height: 34, borderRadius: "var(--radius-sm)", border: "1px solid var(--border-default)", background: "var(--neutral-0)", cursor: "pointer" }}>
             <X size={16} />
           </button>
         </div>

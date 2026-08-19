@@ -13,14 +13,21 @@ Limitacao conhecida (documentada no README): nao ha fallback de visao
 extracao de baixissima qualidade - fora de escopo desta PoC (Secao 4.2).
 Nesses casos a pagina fica marcada como 'ocr_baixa_confianca'.
 
-**Ordem de leitura (limitacao conhecida, documentada no README):** PDFs em
-duas colunas ou com tabelas complexas podem ter a ordem de leitura
-fragmentada, sobretudo no caminho de OCR. `pdfplumber.extract_text()` usa
-por padrao a posicao dos caracteres na pagina para reconstituir a ordem de
-leitura (isso ja ajuda bastante no caminho nativo); o Tesseract roda com
-`--psm 3` (segmentacao automatica de blocos de texto), que lida melhor com
-colunas do que o modo totalmente sem segmentacao, mas continua sendo uma
-heuristica - nao ha garantia de ordem correta em layouts complexos.
+**Deteccao de colunas por coordenadas (adendo tecnico pos-deploy).** No
+caminho nativo (pdfplumber), a pagina nao usa mais `extract_text()`
+diretamente: primeiro roda `_detectar_gap_coluna()` sobre os centros
+horizontais das palavras (`page.extract_words()`), procurando um vazio
+significativo na faixa central da pagina com volume comparavel de
+palavras dos dois lados. Havendo esse vazio, a pagina e tratada como duas
+colunas - as palavras de cada lado sao agrupadas em linhas por
+proximidade vertical e a coluna esquerda inteira e emitida antes da
+direita, que e a ordem de leitura correta e que `extract_text()` (posicao
+bruta na pagina, sem noção de coluna) nao reconstitui sozinho. Nao
+havendo esse vazio, cai para `extract_text()` normal (pagina de coluna
+unica). O numero de colunas detectado fica registrado por pagina em
+`qualidade_extracao` (Postgres). Continua sendo uma heuristica -
+`--psm 3` no Tesseract (caminho OCR, sem deteccao de coluna por
+coordenadas) segue sendo o unico tratamento de coluna nesse caminho.
 
 **Fila de quarentena (nova nesta revisao).** Um documento so e excluido do
 indice (nao vira `documentos`/`chunks`) quando falha de forma severa e
@@ -74,6 +81,9 @@ LIMIAR_FALHA_OCR = 0.8  # proporcao de paginas 'ocr_baixa_confianca' -> quarente
 
 TESSERACT_CONFIG = "--psm 3"  # segmentacao automatica de blocos - ajuda em colunas/tabelas
 
+LARGURA_MIN_GAP_COLUNA_RATIO = 0.04  # gap minimo (fracao da largura da pagina) p/ considerar quebra de coluna
+MIN_PALAVRAS_POR_COLUNA = 15  # abaixo disso de cada lado, nao ha confianca suficiente p/ tratar como 2 colunas
+
 
 class ErroClassificado(Exception):
     def __init__(self, tipo_erro: str, mensagem: str, metodo_que_falhou: str = ""):
@@ -94,14 +104,88 @@ def text_quality_ok(text: str | None) -> bool:
     return alpha_ratio(text) >= MIN_ALPHA_RATIO
 
 
-def extract_native(page) -> tuple[str | None, list]:
-    text = page.extract_text()
+def _detectar_gap_coluna(centros: list[float], largura_pagina: float) -> float | None:
+    """Procura o maior vazio horizontal entre palavras na faixa central da
+    pagina (30%-70% da largura). Devolve a posicao (x) do vazio quando ele
+    e largo o suficiente (`LARGURA_MIN_GAP_COLUNA_RATIO`) e ha palavras
+    suficientes dos dois lados (`MIN_PALAVRAS_POR_COLUNA`) - ambos
+    necessarios para nao classificar como 2 colunas uma pagina de coluna
+    unica que so tem uma margem esquerda maior por acaso (ex: pagina de
+    rosto, tabela com uma coluna vazia)."""
+    if len(centros) < MIN_PALAVRAS_POR_COLUNA * 2:
+        return None
+
+    ordenados = sorted(centros)
+    faixa_min, faixa_max = largura_pagina * 0.3, largura_pagina * 0.7
+    melhor_gap, melhor_pos = 0.0, None
+    for a, b in zip(ordenados, ordenados[1:]):
+        meio = (a + b) / 2
+        if not (faixa_min <= meio <= faixa_max):
+            continue
+        gap = b - a
+        if gap > melhor_gap:
+            melhor_gap, melhor_pos = gap, meio
+
+    if melhor_pos is None or melhor_gap < largura_pagina * LARGURA_MIN_GAP_COLUNA_RATIO:
+        return None
+
+    esquerda = sum(1 for c in ordenados if c < melhor_pos)
+    direita = len(ordenados) - esquerda
+    if esquerda < MIN_PALAVRAS_POR_COLUNA or direita < MIN_PALAVRAS_POR_COLUNA:
+        return None
+    return melhor_pos
+
+
+def _texto_da_coluna(palavras_coluna: list[dict]) -> str:
+    """Agrupa palavras (com coordenadas do pdfplumber) em linhas por
+    proximidade vertical, na ordem de leitura de uma unica coluna (topo ->
+    base, esquerda -> direita dentro de cada linha)."""
+    if not palavras_coluna:
+        return ""
+    alturas = [w["bottom"] - w["top"] for w in palavras_coluna]
+    tolerancia = (sum(alturas) / len(alturas)) * 0.6 or 1.0
+
+    ordenadas = sorted(palavras_coluna, key=lambda w: (w["top"], w["x0"]))
+    linhas = [[ordenadas[0]]]
+    for w in ordenadas[1:]:
+        if abs(w["top"] - linhas[-1][-1]["top"]) <= tolerancia:
+            linhas[-1].append(w)
+        else:
+            linhas.append([w])
+
+    return "\n".join(
+        " ".join(w["text"] for w in sorted(linha, key=lambda w: w["x0"]))
+        for linha in linhas
+    )
+
+
+def extract_native(page) -> tuple[str | None, list, int]:
     tables = page.extract_tables() or []
     tables_md = []
     for table in tables:
         rows = [" | ".join(cell or "" for cell in row) for row in table]
         tables_md.append("\n".join(rows))
-    return text, tables_md
+
+    try:
+        palavras = page.extract_words(use_text_flow=False, keep_blank_chars=False)
+    except Exception:  # noqa: BLE001 - pagina sem texto/palavras extraiveis
+        palavras = []
+
+    gap_pos = None
+    if palavras:
+        centros = [(w["x0"] + w["x1"]) / 2 for w in palavras]
+        gap_pos = _detectar_gap_coluna(centros, page.width)
+
+    if gap_pos is not None:
+        esquerda = [w for w in palavras if (w["x0"] + w["x1"]) / 2 < gap_pos]
+        direita = [w for w in palavras if (w["x0"] + w["x1"]) / 2 >= gap_pos]
+        text = "\n\n".join(t for t in (_texto_da_coluna(esquerda), _texto_da_coluna(direita)) if t)
+        colunas = 2
+    else:
+        text = page.extract_text()
+        colunas = 1
+
+    return text, tables_md, colunas
 
 
 def extract_ocr(pdf_path: str, page_number: int) -> str | None:
@@ -163,7 +247,7 @@ def process_document(entry: dict) -> dict:
         with pdf:
             for i, page in enumerate(pdf.pages, start=1):
                 try:
-                    native_text, tables_md = extract_native(page)
+                    native_text, tables_md, colunas = extract_native(page)
                 except Exception as exc:  # noqa: BLE001
                     raise ErroClassificado("outro", str(exc), f"pdfplumber pagina {i}") from exc
 
@@ -178,6 +262,7 @@ def process_document(entry: dict) -> dict:
                     else:
                         metodo = "ocr_baixa_confianca"
                         texto_final = ocr_text or native_text or ""
+                    colunas = None  # deteccao por coordenadas nao roda no caminho OCR
 
                 if tables_md:
                     texto_final += "\n\n[TABELA]\n" + "\n\n[TABELA]\n".join(tables_md)
@@ -188,6 +273,7 @@ def process_document(entry: dict) -> dict:
                         "pagina": i,
                         "texto": normalize_whitespace(texto_final),
                         "metodo": metodo,
+                        "colunas": colunas,
                         "tem_tabela": bool(tables_md),
                     }
                 )

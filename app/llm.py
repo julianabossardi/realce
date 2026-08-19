@@ -93,3 +93,77 @@ Responda APENAS com um objeto JSON no formato:
             return {"atende": False, "score": 0.0, "justificativa": "resposta do modelo nao pode ser interpretada", "trecho_citado": ""}
 
     return parsed if isinstance(parsed, dict) else {"atende": False, "score": 0.0, "justificativa": "", "trecho_citado": ""}
+
+
+_RESPONSE_SCHEMA_TITULO = {
+    "type": "object",
+    "properties": {
+        "titulo": {"type": "string"},
+        "sintese": {"type": "string"},
+    },
+    "required": ["titulo", "sintese"],
+}
+
+# caracteres do inicio do texto anonimizado enviados ao modelo - o suficiente
+# para cobrir o cabecalho/ementa do ato (onde titulo/objeto do diario
+# normalmente aparecem), sem mandar o documento inteiro. UMA chamada por
+# DOCUMENTO (nao por chunk - ver ingestion/index.py), o que mantem o custo
+# proporcional ao acervo, nao ao numero de trechos indexados.
+CARACTERES_TITULO_SINTESE = 3000
+
+
+def gerar_titulo_e_sintese(texto_documento: str) -> dict:
+    """Gera {titulo, sintese} a partir do inicio do texto (ja normalizado
+    e anonimizado) de UM documento. Falha (timeout, resposta invalida,
+    Ollama fora do ar) e responsabilidade de quem chama tratar - devolve
+    None nesse caso para o chamador recair no nome legivel composto a
+    partir de metadado (municipio/tipo/data), sem quebrar a ingestao."""
+    trecho = texto_documento[:CARACTERES_TITULO_SINTESE]
+    prompt = f"""Voce e um assistente de organizacao documental para o Ministerio Publico.
+Leia o inicio de um diario oficial municipal abaixo e devolva:
+- um TITULO curto e descritivo (max. 12 palavras) que identifique o ato
+  principal deste documento (ex: "Decreto de abertura de credito adicional -
+  Niteroi"), nao generico como "Diario Oficial"
+- uma SINTESE de uma a duas frases resumindo do que trata o documento
+
+Nomes proprios podem aparecer mascarados como [PESSOA_A], [PESSOA_B] etc -
+mantenha esses pseudonimos como estao se precisar citar alguem, nunca
+invente um nome.
+
+Texto:
+\"\"\"
+{trecho}
+\"\"\"
+
+Responda APENAS com um objeto JSON no formato:
+{{"titulo": "...", "sintese": "..."}}"""
+
+    resp = requests.post(
+        f"{OLLAMA_URL}/api/generate",
+        json={
+            "model": OLLAMA_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "format": _RESPONSE_SCHEMA_TITULO,
+            "options": {"temperature": 0.2},
+        },
+        timeout=120,
+    )
+    resp.raise_for_status()
+    raw = resp.json().get("response", "{}")
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", raw)
+        if not match:
+            raise ValueError(f"resposta do modelo nao pode ser interpretada: {raw!r}")
+        parsed = json.loads(match.group(0))
+
+    if not isinstance(parsed, dict) or not parsed.get("titulo"):
+        raise ValueError(f"resposta do modelo sem titulo valido: {parsed!r}")
+
+    return {
+        "titulo": str(parsed["titulo"]).strip(),
+        "sintese": str(parsed.get("sintese", "")).strip(),
+    }

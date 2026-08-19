@@ -169,6 +169,12 @@ def buscar_quarentena() -> dict:
     return resp.json()
 
 
+def buscar_padronizados() -> dict:
+    resp = requests.get(f"{API_URL}/padronizados/stats", timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def main():
     linhas = []
     latencias_por_modo = {modo: [] for modo in MODOS}
@@ -250,6 +256,14 @@ def main():
             print(f"  - {item['tipo_erro']}: {item['total']}")
     except Exception as exc:  # noqa: BLE001
         print(f"\n[nao foi possivel obter stats de quarentena: {exc}]")
+
+    try:
+        p = buscar_padronizados()
+        print(f"\n### Conteúdo padronizado\n")
+        print(f"{p['percentual_padronizados']:.1f}% dos chunks marcados como conteúdo padronizado "
+              f"({p['total_padronizados']} de {p['total_chunks']}) - fora do ranking por padrão.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"\n[nao foi possivel obter stats de padronizados: {exc}]")
 
 
 if __name__ == "__main__":

@@ -25,7 +25,14 @@ Uso:
 Municipios escolhidos (ver README para justificativa):
     - Niteroi/RJ         (3303302) - grande, publicacao digital nativa
     - Angra dos Reis/RJ  (3300100) - medio porte
-    - Varre-Sai/RJ       (3306156) - pequeno porte (~9 mil hab.)
+
+Amostra reduzida de 70 para 30 documentos (Revisao 4, adendo tecnico) - a
+prioridade passou a ser reprocessar o acervo inteiro (normalizacao +
+chunking semantico + deteccao de colunas, todos custosos em CPU local) de
+forma completa e verificavel dentro do prazo, em vez de uma amostra maior
+com risco de nao terminar. Varre-Sai (pequeno porte) saiu da amostra nesta
+revisao - a demonstracao de "funciona em municipio pequeno" fica para uma
+proxima leva, nao removida por ter falhado.
 """
 from __future__ import annotations
 
@@ -40,9 +47,8 @@ API_BASE = "https://api.queridodiario.ok.org.br"
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
 MUNICIPIOS = [
-    {"territory_id": "3303302", "nome": "Niteroi", "docs_por_municipio": 25},
-    {"territory_id": "3300100", "nome": "Angra dos Reis", "docs_por_municipio": 25},
-    {"territory_id": "3306156", "nome": "Varre-Sai", "docs_por_municipio": 20},
+    {"territory_id": "3303302", "nome": "Niteroi", "docs_por_municipio": 15},
+    {"territory_id": "3300100", "nome": "Angra dos Reis", "docs_por_municipio": 15},
 ]
 
 REQUEST_INTERVAL_SECONDS = 1.0  # a API pede ritmo de referencia de 60 req/min

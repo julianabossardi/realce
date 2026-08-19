@@ -28,6 +28,8 @@ export type ResultadoBusca = {
   arquivo_local: string;
   tipo_documento: string | null;
   nivel_restricao: "publico" | "restrito" | "sigiloso";
+  titulo: string | null;
+  sintese: string | null;
   avaliacoes: Avaliacao[];
   score_criterios: number;
   similaridade?: number;
@@ -57,6 +59,8 @@ export type AcervoDoc = {
   data_publicacao: string;
   url_origem: string;
   nivel_restricao: string;
+  titulo: string | null;
+  sintese: string | null;
   status: "Processado";
 };
 

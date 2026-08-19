@@ -117,7 +117,7 @@ for r in resultados:
 st.divider()
 st.subheader("Painéis operacionais")
 
-col_q, col_f = st.columns(2)
+col_q, col_p, col_f = st.columns(3)
 
 with col_q:
     st.markdown("**Quarentena (% do acervo inacessível, por causa)**")
@@ -128,6 +128,15 @@ with col_q:
             st.table(q["por_tipo_erro"])
         else:
             st.caption("Nenhum documento em quarentena nesta amostra.")
+    except Exception as exc:
+        st.caption(f"Indisponível: {exc}")
+
+with col_p:
+    st.markdown("**Conteúdo padronizado (% de chunks fora do ranking por padrão)**")
+    try:
+        p = requests.get(f"{API_URL}/padronizados/stats", timeout=10).json()
+        st.metric("% padronizado", f"{p['percentual_padronizados']:.1f}%")
+        st.caption(f"{p['total_padronizados']} de {p['total_chunks']} chunks - formulários/anexos que se repetem entre documentos.")
     except Exception as exc:
         st.caption(f"Indisponível: {exc}")
 

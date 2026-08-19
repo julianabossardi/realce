@@ -53,7 +53,7 @@ export default function Page() {
   const [acervoQuery, setAcervoQuery] = useState("");
   const [acervoTipo, setAcervoTipo] = useState("");
 
-  const [fullDoc, setFullDoc] = useState<{ titulo: string; texto: string | null; carregando: boolean; erro?: string } | null>(null);
+  const [fullDoc, setFullDoc] = useState<{ titulo: string; sintese?: string | null; texto: string | null; carregando: boolean; erro?: string } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const activeCase = casos.find((c) => c.id === activeCaseId) || null;
@@ -178,14 +178,14 @@ export default function Page() {
   }
 
   async function openFullDoc(r: ResultadoBusca) {
-    setFullDoc({ titulo: r.arquivo_local, texto: null, carregando: true });
+    setFullDoc({ titulo: r.titulo || r.arquivo_local, texto: null, carregando: true });
     try {
       const doc = await api.documentoCompleto(r.documento_id, perfil);
-      setFullDoc({ titulo: doc.arquivo_local, texto: doc.texto_completo, carregando: false });
+      setFullDoc({ titulo: doc.titulo || doc.arquivo_local, sintese: doc.sintese, texto: doc.texto_completo, carregando: false });
     } catch (err) {
       const sigiloso = err instanceof Error && err.message.startsWith("403");
       setFullDoc({
-        titulo: r.arquivo_local,
+        titulo: r.titulo || r.arquivo_local,
         texto: null,
         carregando: false,
         erro: sigiloso
@@ -467,12 +467,12 @@ export default function Page() {
                     <div
                       key={d.id}
                       onClick={() => {
-                        setFullDoc({ titulo: d.arquivo_local, texto: null, carregando: true });
+                        setFullDoc({ titulo: d.titulo || d.arquivo_local, sintese: d.sintese, texto: null, carregando: true });
                         openFullDocFromAcervo(d);
                       }}
                       style={{ display: "grid", gridTemplateColumns: "2.4fr 1.2fr 1.2fr .9fr .9fr", padding: "13px 16px", borderBottom: "1px solid var(--border-subtle)", alignItems: "center", cursor: "pointer" }}
                     >
-                      <div style={{ fontSize: 14 }}>{d.arquivo_local}</div>
+                      <div style={{ fontSize: 14 }}>{d.titulo || d.arquivo_local}</div>
                       <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{d.tipo_documento || "—"}</div>
                       <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{d.municipio}</div>
                       <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{d.data_publicacao}</div>
@@ -532,6 +532,7 @@ export default function Page() {
       {fullDoc && (
         <FullDocModal
           titulo={fullDoc.titulo}
+          sintese={fullDoc.sintese}
           texto={fullDoc.texto}
           carregando={fullDoc.carregando}
           erro={fullDoc.erro}
@@ -550,11 +551,11 @@ export default function Page() {
   async function openFullDocFromAcervo(d: AcervoDoc) {
     try {
       const doc = await api.documentoCompleto(d.id, perfil);
-      setFullDoc({ titulo: doc.arquivo_local, texto: doc.texto_completo, carregando: false });
+      setFullDoc({ titulo: doc.titulo || doc.arquivo_local, sintese: doc.sintese, texto: doc.texto_completo, carregando: false });
     } catch (err) {
       const sigiloso = err instanceof Error && err.message.startsWith("403");
       setFullDoc({
-        titulo: d.arquivo_local,
+        titulo: d.titulo || d.arquivo_local,
         texto: null,
         carregando: false,
         erro: sigiloso

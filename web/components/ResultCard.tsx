@@ -25,7 +25,10 @@ export function ResultCard({
 }) {
   const tier = scoreTier(r);
   const criteriosAtendidos = r.avaliacoes.filter((a) => a.atende).slice(0, 2);
-  const summary = resumoDe(r.texto);
+  // titulo do documento (gerado na ingestao por LLM, uma vez por documento -
+  // nao mais um corte cru do chunk); resumoDe so entra como fallback para
+  // dados ingeridos antes dessa camada existir, ou se a geracao falhou.
+  const titulo = r.titulo || resumoDe(r.texto);
 
   return (
     <div
@@ -59,10 +62,24 @@ export function ResultCard({
         </span>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", lineHeight: 1.4 }}>
-            {summary}
+            {titulo}
           </div>
-          <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginTop: 4 }}>
-            {r.arquivo_local} · {r.data_publicacao}
+          <div
+            style={{
+              fontSize: 13,
+              color: "var(--text-secondary)",
+              marginTop: 4,
+              lineHeight: 1.5,
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {r.texto}
+          </div>
+          <div style={{ fontSize: 12.5, color: "var(--text-tertiary)", marginTop: 4 }}>
+            {r.municipio} · {r.data_publicacao}
             {r.pagina ? ` · p. ${r.pagina}` : ""}
           </div>
         </div>

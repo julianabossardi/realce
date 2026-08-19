@@ -40,7 +40,11 @@ def _resolver_pseudonimos(conn, consulta: str) -> list[str]:
     ]
 
 
-def _aplicar_filtros_sql(filtro_municipio: str | None, filtro_tipo_documento: str | None) -> tuple[str, list]:
+def _aplicar_filtros_sql(
+    filtro_municipio: str | None,
+    filtro_tipo_documento: str | None,
+    incluir_padronizados: bool = False,
+) -> tuple[str, list]:
     condicoes = []
     params = []
     if filtro_municipio:
@@ -49,6 +53,8 @@ def _aplicar_filtros_sql(filtro_municipio: str | None, filtro_tipo_documento: st
     if filtro_tipo_documento:
         condicoes.append("d.tipo_documento = %s")
         params.append(filtro_tipo_documento)
+    if not incluir_padronizados:
+        condicoes.append("c.eh_padronizado = false")
     sql = (" and " + " and ".join(condicoes)) if condicoes else ""
     return sql, params
 
@@ -59,11 +65,15 @@ def busca_lexica(
     limite: int,
     filtro_municipio: str | None = None,
     filtro_tipo_documento: str | None = None,
+    incluir_padronizados: bool = False,
 ) -> list[dict]:
     """Caminho lexico puro: full-text search nativo do Postgres
-    (`tsvector`/`websearch_to_tsquery`, dicionario portugues)."""
+    (`tsvector`/`websearch_to_tsquery`, dicionario portugues). Chunks
+    marcados como conteudo padronizado (formularios/anexos que se repetem
+    entre documentos - Secao 4.4) ficam fora por padrao (ver
+    `ingestion/dedupe.py`)."""
     pseudonimos = _resolver_pseudonimos(conn, consulta)
-    filtro_sql, filtro_params = _aplicar_filtros_sql(filtro_municipio, filtro_tipo_documento)
+    filtro_sql, filtro_params = _aplicar_filtros_sql(filtro_municipio, filtro_tipo_documento, incluir_padronizados)
 
     campos_linhagem = (
         "c.id, c.documento_id, c.pagina, c.texto, c.metodo_extracao, "
@@ -112,17 +122,19 @@ def busca_vetorial(
     limite: int,
     filtro_municipio: str | None = None,
     filtro_tipo_documento: str | None = None,
+    incluir_padronizados: bool = False,
 ) -> list[dict]:
     """Caminho vetorial puro: embedding da consulta (local) + busca por
-    similaridade de cosseno no pgvector."""
+    similaridade de cosseno no pgvector. Chunks padronizados ficam fora
+    por padrao (ver `busca_lexica`)."""
     pseudonimos = _resolver_pseudonimos(conn, consulta)
     consulta_enriquecida = consulta + (" " + " ".join(pseudonimos) if pseudonimos else "")
     vetor = embed_consulta(consulta_enriquecida)
 
     with conn.cursor() as cur:
         cur.execute(
-            "select * from match_chunks(%s::vector, %s, %s, %s)",
-            (vetor, limite, filtro_municipio, filtro_tipo_documento),
+            "select * from match_chunks(%s::vector, %s, %s, %s, %s)",
+            (vetor, limite, filtro_municipio, filtro_tipo_documento, incluir_padronizados),
         )
         return cur.fetchall()
 
@@ -155,11 +167,12 @@ def busca_hibrida(
     limite: int,
     filtro_municipio: str | None = None,
     filtro_tipo_documento: str | None = None,
+    incluir_padronizados: bool = False,
 ) -> list[dict]:
     """Modo hibrido (mudanca central desta revisao - Secao 4.5): roda os
     dois caminhos e funde os rankings por RRF antes de cortar o top-K."""
-    lista_lexica = busca_lexica(conn, consulta, CANDIDATOS_POR_CAMINHO, filtro_municipio, filtro_tipo_documento)
-    lista_vetorial = busca_vetorial(conn, consulta, CANDIDATOS_POR_CAMINHO, filtro_municipio, filtro_tipo_documento)
+    lista_lexica = busca_lexica(conn, consulta, CANDIDATOS_POR_CAMINHO, filtro_municipio, filtro_tipo_documento, incluir_padronizados)
+    lista_vetorial = busca_vetorial(conn, consulta, CANDIDATOS_POR_CAMINHO, filtro_municipio, filtro_tipo_documento, incluir_padronizados)
     fundidos = _fusao_rrf(lista_lexica, lista_vetorial)
     return fundidos[:limite]
 
@@ -178,7 +191,8 @@ def buscar(
     limite: int,
     filtro_municipio: str | None = None,
     filtro_tipo_documento: str | None = None,
+    incluir_padronizados: bool = False,
 ) -> list[dict]:
     if modo not in MODOS:
         raise ValueError(f"modo invalido: {modo!r} (esperado: {list(MODOS)})")
-    return MODOS[modo](conn, consulta, limite, filtro_municipio, filtro_tipo_documento)
+    return MODOS[modo](conn, consulta, limite, filtro_municipio, filtro_tipo_documento, incluir_padronizados)

@@ -39,6 +39,7 @@ class BuscaRequest(BaseModel):
     filtro_municipio: str | None = None
     filtro_tipo_documento: str | None = None
     avaliar: bool = True  # False = so retrieval, sem chamar o LLM (ver nota abaixo)
+    incluir_padronizados: bool = False  # True = inclui chunks marcados como conteudo padronizado (Secao 4.4)
 
 
 class FeedbackRequest(BaseModel):
@@ -57,7 +58,7 @@ def _anexar_documentos_e_avaliar(conn, chunks: list[dict], perfil: str, avaliar:
     with conn.cursor() as cur:
         cur.execute(
             "select id, municipio, data_publicacao, url_origem, arquivo_local, "
-            "tipo_documento, nivel_restricao from documentos where id = any(%s)",
+            "tipo_documento, nivel_restricao, titulo, sintese from documentos where id = any(%s)",
             (doc_ids,),
         )
         documentos = {d["id"]: d for d in cur.fetchall()}
@@ -99,6 +100,8 @@ def _anexar_documentos_e_avaliar(conn, chunks: list[dict], perfil: str, avaliar:
                 "arquivo_local": doc["arquivo_local"],
                 "tipo_documento": doc["tipo_documento"],
                 "nivel_restricao": doc["nivel_restricao"],
+                "titulo": doc["titulo"],
+                "sintese": doc["sintese"],
                 "avaliacoes": avaliacoes,
                 "score_criterios": max((a["score"] for a in avaliacoes), default=0.0),
             }
@@ -141,6 +144,7 @@ def search(req: BuscaRequest):
             conn, req.consulta, req.modo, req.limite,
             filtro_municipio=req.filtro_municipio,
             filtro_tipo_documento=req.filtro_tipo_documento,
+            incluir_padronizados=req.incluir_padronizados,
         )
         resultados = _anexar_documentos_e_avaliar(conn, chunks, req.perfil, req.avaliar)
         return {"modo": req.modo, "consulta": req.consulta, "resultados": resultados}
@@ -388,7 +392,8 @@ def listar_acervo(q: str | None = None, tipo: str | None = None, limite: int = 2
             cur.execute(
                 f"""
                 select d.id, d.arquivo_local, d.municipio, d.tipo_documento,
-                       d.data_publicacao, d.url_origem, d.nivel_restricao, 'Processado' as status
+                       d.data_publicacao, d.url_origem, d.nivel_restricao,
+                       d.titulo, d.sintese, 'Processado' as status
                 from documentos d
                 {where_sql}
                 order by d.data_publicacao desc nulls last
@@ -417,8 +422,8 @@ def documento_completo(documento_id: str, perfil: str = "sem_clearance"):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "select id, arquivo_local, municipio, tipo_documento, data_publicacao, url_origem, nivel_restricao "
-                "from documentos where id = %s",
+                "select id, arquivo_local, municipio, tipo_documento, data_publicacao, url_origem, "
+                "nivel_restricao, titulo, sintese from documentos where id = %s",
                 (documento_id,),
             )
             doc = cur.fetchone()
@@ -448,6 +453,32 @@ def documento_completo(documento_id: str, perfil: str = "sem_clearance"):
             registrar_auditoria(conn, perfil, documento_id, [e["pseudonimo"] for e in entidades])
 
         return {**doc, "texto_completo": texto_completo, "num_chunks": len(chunks)}
+    finally:
+        conn.close()
+
+
+@app.get("/padronizados/stats")
+def padronizados_stats():
+    """% de chunks marcados como conteudo padronizado (Secao 4.4 do
+    adendo tecnico) - formularios/anexos que se repetem entre documentos e
+    saem do ranking de busca por padrao. Mesma logica de exposicao da
+    quarentena: nao esconder o que foi filtrado, mostrar quanto e por
+    que."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "select count(*) filter (where eh_padronizado) as padronizados, count(*) as total from chunks"
+            )
+            row = cur.fetchone()
+        total = row["total"] or 0
+        padronizados = row["padronizados"] or 0
+        percentual = (100 * padronizados / total) if total else 0.0
+        return {
+            "total_chunks": total,
+            "total_padronizados": padronizados,
+            "percentual_padronizados": percentual,
+        }
     finally:
         conn.close()
 

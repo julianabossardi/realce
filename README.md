@@ -15,6 +15,7 @@ como essa peça se conecta ao backend local sem abrir mão da arquitetura 100% l
 
 ## Sumário
 
+- [Revisão 4 — normalização e enriquecimento na ingestão](#revisão-4--normalização-e-enriquecimento-na-ingestão-adendo-técnico)
 - [Revisão 3 — frontend novo e deploy híbrido](#revisão-3--frontend-novo-e-deploy-hibrido-vercel--backend-local)
 - [O que mudou na revisão 2](#o-que-mudou-nesta-revisão)
 - [Setup e reprodução](#setup-e-reprodução)
@@ -151,6 +152,94 @@ problemas:
   dominadas por pontuação/sublinhado, preferindo a primeira linha com conteúdo real do próprio
   chunk — não é uma síntese semântica do documento inteiro (exigiria um LLM por resultado), só uma
   seleção melhor do que os primeiros N caracteres crus.
+
+---
+
+## Revisão 4 — normalização e enriquecimento na ingestão (adendo técnico)
+
+Diagnóstico recebido após a Revisão 3, com sintomas concretos observados na interface: chunks
+cortando palavras e tokens de anonimização ao meio (`ebimento` em vez de `recebimento`,
+`PESSOA_FN]` sem colchete de abertura); ordem de leitura fragmentada em páginas diagramadas em
+colunas; formulários e anexos padronizados dominando os resultados de busca; ausência de um campo
+de título (a interface usava a primeira linha crua do chunk); e nome de arquivo com hash como
+identificação do documento. Causa raiz comum aos três primeiros: faltava uma camada de
+normalização/enriquecimento entre a extração de texto e o chunking — o pipeline ia direto de um
+para o outro.
+
+Seis correções, aplicadas nesta ordem (a mesma do diagnóstico, por relação impacto/esforço):
+
+1. **Normalização do texto extraído** (`ingestion/normalize.py`, nova etapa entre `extract.py` e o
+   chunking): reúne palavras hifenizadas quebradas por fim de linha, converte quebra de linha
+   simples em espaço preservando quebra dupla como separador de parágrafo, colapsa espaços/linhas
+   em branco, substitui sequências de sublinhado/ponto/traço (campo de preenchimento de formulário)
+   por um marcador único (`[CAMPO]`), e remove cabeçalho/rodapé que se repete entre as páginas do
+   mesmo documento (comparação de linha normalizada — número vira `#` — entre páginas, ver
+   `remover_cabecalhos_rodapes_repetidos`). Roda por documento (não por página isolada), porque
+   detectar cabeçalho/rodapé repetido exige comparar páginas entre si.
+2. **Chunking por fronteira semântica** (`ingestion/chunk.py`, substitui o corte por contagem bruta
+   de caracteres): divide por parágrafo primeiro, agrupa parágrafos consecutivos até aproximar
+   ~2000 caracteres sem ultrapassar, e só desce para corte por sentença quando um parágrafo isolado
+   já excede o alvo (nunca corta dentro de sentença; na ausência de qualquer pontuação, cai para
+   corte por palavra como último recurso). Um token `[TIPO_XXX]` nunca é dividido — consequência
+   direta de nunca cortar fora de fronteira de espaço/parágrafo/sentença, não um caso especial à
+   parte. Chunks abaixo de 80 caracteres úteis são descartados (tipicamente fragmento residual de
+   cabeçalho).
+3. **Nome legível do documento**: os campos de origem/data/edição já vinham do manifest da fonte
+   (`municipio`, `data_publicacao`, `edicao` já existiam em `documentos` desde a Revisão 2) — o que
+   faltava era um título de fato. Resolvido junto com o item 5 abaixo (`documentos.titulo`); o nome
+   de arquivo com hash permanece no registro, exposto só via API/rastreabilidade, não como rótulo
+   principal na interface.
+4. **Filtragem de conteúdo padronizado** (`ingestion/dedupe.py`, roda em duas fases porque a
+   decisão depende do acervo inteiro, não de um documento isolado): calcula um hash do texto de
+   cada chunk após generalizar pseudônimos de anonimização (`[PESSOA_A]`/`[PESSOA_B]` → `[X]`, para
+   que o mesmo formulário preenchido com pessoas diferentes em documentos diferentes ainda seja
+   reconhecido como o mesmo template) e marca como `eh_padronizado` os chunks cujo hash se repete em
+   5+ documentos distintos, complementado por uma heurística de densidade (chunk dominado por
+   marcadores `[CAMPO]` em vez de texto útil). **Marca, não exclui** — chunks padronizados saem do
+   ranking de busca por padrão (`app/search.py`, `incluir_padronizados=False`) mas continuam
+   acessíveis via `/documentos/{id}/completo` e na exploração livre do acervo. Métrica exposta em
+   `/padronizados/stats`, mesma lógica de transparência da quarentena.
+5. **Título e síntese gerados na ingestão** (`app/llm.py:gerar_titulo_e_sintese`): UMA chamada ao
+   LLM local por DOCUMENTO (não por chunk), enviando os primeiros ~3000 caracteres do texto já
+   normalizado/anonimizado, pedindo `{"titulo": "...", "sintese": "..."}` em JSON. Gravado em
+   `documentos.titulo`/`documentos.sintese` (migration `0007`). Em caso de falha (timeout, resposta
+   inválida), recai sobre um nome legível composto a partir de metadado
+   (`município · tipo · data`) — nunca quebra a ingestão nem deixa o campo vazio. A interface usa o
+   título como cabeçalho do card, a síntese na camada de detalhe, e o trecho recuperado como corpo
+   — substituindo a heurística `resumoDe` da Revisão 3 (que continua como fallback para dados
+   ingeridos antes desta camada existir).
+6. **Ordem de leitura em páginas com colunas** (`ingestion/extract.py`): antes de extrair o texto de
+   uma página, `_detectar_gap_coluna` analisa a distribuição horizontal dos centros das palavras
+   (`page.extract_words()`) procurando um vazio largo o bastante na faixa central da página com
+   volume comparável de palavras dos dois lados. Havendo esse vazio, a página é tratada como duas
+   colunas — cada lado é reconstruído em linhas por proximidade vertical e a coluna esquerda inteira
+   é emitida antes da direita (ordem de leitura correta, que `extract_text()` sozinho não
+   reconstitui). Sem esse vazio, cai para `extract_text()` normal. O número de colunas detectado
+   fica registrado por página em `qualidade_extracao`. Só roda no caminho nativo (pdfplumber); o
+   caminho OCR continua dependendo só de `--psm 3` do Tesseract para colunas, como antes.
+
+### Reprocessamento
+
+As correções 1, 2, 4 e 6 mudam o texto indexado — depois de aplicá-las, o acervo inteiro foi
+reprocessado do zero (cache de extração apagado, tabelas `documentos`/`chunks`/
+`entidades_mascaradas` truncadas, `extract.py` + `index.py` rodados de novo). As correções 3 e 5 só
+alteram a tabela `documentos`, sem exigir reindexação de vetores — mas como o reprocessamento
+completo já estava acontecendo por causa das outras quatro, entraram juntas. Números de
+recall/precisão de antes desta revisão não são comparáveis aos de depois; ver
+[Resultado da avaliação da hipótese](#resultado-da-avaliação-da-hipótese) para a rodada pós-correção
+(a rodada anterior fica só como referência histórica de que a extração pobre pesava no resultado).
+
+**Amostra reduzida de 70 para 30 documentos, no meio do reprocessamento**: rodando localmente em
+CPU (sem GPU dedicada), o custo por documento — normalização, chunking, embeddings, e a chamada de
+LLM para título/síntese — ficou em torno de 100-170s/documento, e o processo foi ainda interrompido
+uma vez por um problema de permissão de sistema operacional (macOS revogou o acesso à pasta do
+projeto a meio do processamento; ver histórico de commits). Diante do risco real de não concluir um
+reprocessamento de 70 documentos dentro do prazo, a decisão foi reduzir para 30 documentos bem
+processados e verificáveis — 15 de Niterói e 15 de Angra dos Reis (Varre-Sai saiu desta amostra,
+não por falha, só por escopo) — garantindo que os 14 documentos referenciados no gabarito do
+experimento (`experiments/compare_modes.py`) permanecessem na amostra final. Escala vs.
+confiabilidade dentro do prazo é exatamente o tipo de troca que apareceria em produção também,
+numa forma maior (ver Riscos e evolução para produção).
 
 ---
 
@@ -343,12 +432,13 @@ desta PoC por decisão explícita do brief.
 classificável (`texto_vazio`, `texto_insuficiente`, `falha_ocr`, `encoding_invalido`,
 `pdf_corrompido`, `outro`) — não quando só uma página isolada sai ruim dentro de um PDF bom. O
 mecanismo foi validado com um PDF corrompido sintético (bytes aleatórios), classificado
-corretamente como `pdf_corrompido`; a amostra real (70 documentos) não gerou nenhum caso de
+corretamente como `pdf_corrompido`; a amostra real (30 documentos) não gerou nenhum caso de
 quarentena — ver [Resultado da avaliação](#resultado-da-avaliação-da-hipótese) para os números
 completos de extração.
 
-**Ordem de leitura**: `pdfplumber.extract_text()` já reconstitui a ordem de leitura pela posição
-dos caracteres na página; o Tesseract roda com `--psm 3` (segmentação automática de blocos), que
+**Ordem de leitura**: desde a Revisão 4, o caminho nativo detecta colunas por coordenadas antes de
+chamar `extract_text()` (ver adendo técnico) em vez de depender só da posição bruta de caracteres;
+o Tesseract (caminho OCR) continua rodando com `--psm 3` (segmentação automática de blocos), que
 ajuda em colunas/tabelas mas continua sendo heurística — ver [Limitações](#limitações-conhecidas).
 
 ### Anonimização com pseudônimos consistentes (Seção 4.3)
@@ -377,12 +467,13 @@ simples nesta PoC (`ingestion/index.py::_classificar_nivel_restricao`): sem enti
 público; com nome de pessoa → restrito; com CPF/RG → sigiloso. Documento sigiloso **some** do
 resultado para quem não tem clearance, em vez de aparecer mascarado (`app/access.py`).
 
-**Achado real na amostra**: essa regra simples classificou **69 dos 70 documentos como sigilosos**
-— basta um único CPF/RG aparecer em qualquer lugar do documento (comum em editais com lista de
-candidatos, tabelas de pensionistas, etc.), e diários oficiais tendem a acumular vários atos
-diferentes por edição. Isso é uma consequência honesta da regra escolhida, não um bug, mas deixa
-claro que uma regra binária "tem CPF → sigiloso" é grosseira demais para uso real — o experimento
-(abaixo) precisou rodar com `perfil=com_clearance` para não medir recall/precisão sobre um acervo
+**Achado real na amostra**: essa regra simples classifica **15 dos 30 documentos como sigilosos**
+(e os outros 15 como restritos, nenhum público) — basta um único CPF/RG aparecer em qualquer lugar
+do documento (comum em editais com lista de candidatos, tabelas de pensionistas, etc.), e diários
+oficiais tendem a acumular vários atos diferentes por edição. Isso é uma consequência honesta da
+regra escolhida, não um bug, mas deixa claro que uma regra binária "tem CPF → sigiloso" é grosseira
+demais para uso real — o experimento (abaixo) precisou rodar com `perfil=com_clearance` para não
+medir recall/precisão sobre um acervo
 quase inteiramente invisível. Ver [Limitações](#limitações-conhecidas).
 
 ### Critérios como dado (Seção 4.6)
@@ -449,44 +540,49 @@ implementado nesta PoC, mas é a evolução mais provável desta arquitetura (ve
 
 Ver [experiments/compare_modes.py](experiments/compare_modes.py) para o script completo e a
 metodologia do gabarito (7 perguntas: 5 de descrição semântica, 2 de termo exato). Resultado obtido
-rodando as perguntas contra os 70 documentos da amostra, via API local:
+rodando as perguntas contra os 30 documentos da amostra pós-Revisão 4 (normalização + chunking
+semântico + detecção de colunas + filtragem de conteúdo padronizado — ver adendo técnico), via API
+local. **Números de antes da Revisão 4 (70 documentos, extração sem essas correções) não são
+comparáveis a estes** — ficam só como nota de rodapé no fim desta seção.
 
 **Resultado geral (média das 7 perguntas):**
 
 | Modo | Recall médio | Precisão média | Latência média de busca (s) |
 |---|---|---|---|
-| léxico | 0.38 | 0.28 | 0.96 |
-| vetorial | 0.22 | 0.10 | 3.39 |
-| **híbrido** | **0.43** | 0.14 | 2.72 |
+| léxico | 0.59 | 0.30 | 0.16 |
+| vetorial | 0.36 | 0.11 | 1.26 |
+| **híbrido** | **0.61** | 0.16 | 0.30 |
 
 **Só perguntas de descrição semântica** (5 perguntas — onde o vocabulário da pergunta diverge do
 documento):
 
 | Modo | Recall médio | Precisão média |
 |---|---|---|
-| léxico | 0.13 | 0.15 |
-| vetorial | 0.11 | 0.12 |
-| **híbrido** | **0.20** | 0.15 |
+| léxico | 0.43 | 0.19 |
+| vetorial | 0.30 | 0.12 |
+| **híbrido** | **0.45** | 0.16 |
 
 **Só perguntas de termo exato** (2 perguntas — nome de pessoa via índice de entidades, e número de
 portaria):
 
 | Modo | Recall médio | Precisão média |
 |---|---|---|
-| léxico | **1.00** | **0.60** |
-| vetorial | 0.50 | 0.06 |
-| híbrido | **1.00** | 0.13 |
+| léxico | **1.00** | **0.58** |
+| vetorial | 0.50 | 0.08 |
+| híbrido | **1.00** | 0.15 |
 
-**Avaliação por critério (modo híbrido, LLM ligado):** 14,3% de citações não verificadas (2 de 14
-avaliações com citação retornaram um trecho que não bate literalmente com o chunk após normalizar
-espaços — ver nota abaixo). Latência média por consulta com avaliação ligada: ~217s (4 candidatos ×
-até 4 critérios cada, em CPU, sem paralelismo). **Quarentena: 0% do acervo** (0 de 70 documentos —
-a amostra não teve nenhum caso de falha severa de extração, ver Decisões técnicas).
+**Avaliação por critério (modo híbrido, LLM ligado):** 11,1% de citações não verificadas (1 de 9
+avaliações com citação retornou um trecho que não bate literalmente com o chunk após normalizar
+espaços). Latência média por consulta com avaliação ligada: ~214s (4 candidatos × até 4 critérios
+cada, em CPU, sem paralelismo). **Quarentena: 0% do acervo** (0 de 30 documentos). **Conteúdo
+padronizado: 0,5% dos chunks** (13 de 2821 — formulários/anexos que se repetem entre documentos,
+fora do ranking por padrão, ver adendo técnico).
 
-**A hipótese se confirma, com uma ressalva importante sobre precisão.** No agregado e no subconjunto
-semântico, o híbrido supera as duas pontas em recall — exatamente o que a hipótese revisada previa.
+**A hipótese se confirma, com a mesma ressalva sobre precisão observada antes da Revisão 4.** No
+agregado e no subconjunto semântico, o híbrido continua superando as duas pontas em recall —
+exatamente o que a hipótese revisada previa, e o padrão se manteve depois da correção da extração.
 No subconjunto de termo exato, híbrido empata com léxico em recall (ambos 1.00), mas **léxico tem
-precisão bem maior** (0.60 vs. 0.13): quando o termo é exato, a busca vetorial trazida pela fusão
+precisão bem maior** (0.58 vs. 0.15): quando o termo é exato, a busca vetorial trazida pela fusão
 RRF adiciona candidatos semanticamente relacionados mas irrelevantes ao termo específico buscado,
 diluindo a precisão sem ganhar recall adicional. Isso não invalida a hipótese (o objetivo é recall
 alto sem perder o léxico como opção), mas é um resultado que contraria a expectativa ingênua de que
@@ -495,14 +591,39 @@ revelar (Seção 5 do brief: "o resultado interessa mesmo se contrariar a expect
 isso sugere valor em deixar o usuário optar por léxico puro quando já sabe exatamente o termo que
 procura (nome, número de processo) — o que a interface de demonstração já permite.
 
-**Nota sobre a normalização da verificação de citação:** a primeira versão desta métrica marcava
-~100% das citações como "não verificadas" — não porque o modelo alucinava, mas porque o texto
-extraído do PDF carrega quebras de linha no meio de frases (artefato do `pdfplumber`/OCR), e o
-modelo naturalmente substitui a quebra por um espaço ao citar o mesmo conteúdo literal. A correção
-(`app/evaluate.py::_citacao_verificada`) normaliza espaços em branco dos dois lados antes de
-comparar — depois da correção, a taxa caiu para 14,3%, um número que soa plausível para citação
-alucinada real (um dos casos observados: o modelo colou dois valores monetários não-contíguos do
-mesmo chunk como se fossem uma citação única).
+**O que mudou visivelmente com a extração corrigida**: recall médio subiu em todas as linhas (ex:
+recall geral do híbrido foi de 0.43 para 0.61; precisão geral do léxico, de 0.28 para 0.30);
+precisão de termo exato ficou estável (léxico: 0.60 → 0.58, dentro da variação esperada para 2
+perguntas) e a latência de busca caiu bastante (retrieval geral do híbrido: 2.72s → 0.30s) — não por o hardware ter
+ficado mais rápido, mas porque a amostra ficou menor (30 vs. 70 documentos) E os chunks ficaram mais
+enxutos e menos redundantes (chunking semântico + filtragem de padronizados), então cada busca
+examina menos candidatos ruidosos. A taxa de citação não verificada também caiu (14,3% → 11,1%,
+amostras pequenas demais para tratar como tendência forte, mas na direção esperada de chunks mais
+limpos gerando citações mais fiéis). **Isso não isola sozinho o efeito da correção de extração** —
+a amostra também mudou de tamanho (70→30, ver Revisão 4) e composição (perdeu Varre-Sai) ao mesmo
+tempo, então a comparação direta dos números é só indicativa, não uma medição controlada de "quanto
+da melhora veio de cada mudança".
+
+**Nota sobre a normalização da verificação de citação:** a primeira versão desta métrica (antes da
+Revisão 3) marcava ~100% das citações como "não verificadas" — não porque o modelo alucinava, mas
+porque o texto extraído do PDF carregava quebras de linha no meio de frases (artefato do
+`pdfplumber`/OCR), e o modelo naturalmente substituía a quebra por um espaço ao citar o mesmo
+conteúdo literal. A correção (`app/evaluate.py::_citacao_verificada`) normaliza espaços em branco
+dos dois lados antes de comparar.
+
+<details>
+<summary>Números de antes da Revisão 4 (70 documentos, sem normalização/chunking semântico/detecção
+de colunas) — não comparáveis aos de cima, mantidos só como referência histórica</summary>
+
+| Modo | Recall médio | Precisão média | Latência média de busca (s) |
+|---|---|---|---|
+| léxico | 0.38 | 0.28 | 0.96 |
+| vetorial | 0.22 | 0.10 | 3.39 |
+| híbrido | 0.43 | 0.14 | 2.72 |
+
+Citação não verificada: 14,3% (2 de 14). Quarentena: 0% (0 de 70).
+
+</details>
 
 **Nota sobre o custo do experimento:** a primeira tentativa deste script chamava `/search` com
 avaliação por critério ligada em toda busca de teste (3 modos × 7 perguntas), o que significa até
@@ -515,9 +636,13 @@ menor de candidatos) — ver `app/main.py` e `experiments/compare_modes.py`.
 
 ## Limitações conhecidas
 
-- **Amostra pequena**: 70 documentos de 3 municípios (Niterói, Angra dos Reis, Varre-Sai — ver
-  `ingestion/source_querido_diario.py`), frente aos ~500 mil do cenário real do MPRJ. A PoC valida
-  a abordagem, não a escala.
+- **Amostra pequena**: 30 documentos de 2 municípios (Niterói, Angra dos Reis — ver
+  `ingestion/source_querido_diario.py`), frente aos ~500 mil do cenário real do MPRJ. Reduzida de
+  70 para 30 na Revisão 4 (adendo técnico) — o reprocessamento completo do acervo (normalização +
+  chunking semântico + detecção de colunas, tudo em CPU local) tornava 70 documentos um risco real
+  de não terminar dentro do prazo; 30 bem processados foi a troca deliberada. Varre-Sai (pequeno
+  porte) ficou de fora desta rodada, não por ter falhado — fica para uma amostra futura. A PoC
+  valida a abordagem, não a escala.
 - **Diário oficial ≠ acervo do MPRJ**: natureza, sensibilidade e estrutura diferem. Serve como
   proxy realista de "documento público, PDF variável, volume alto", não como equivalente exato.
 - **NER local não é perfeito, em várias direções**: erra sistematicamente nomes em MAIÚSCULAS
@@ -529,18 +654,22 @@ menor de candidatos) — ver `app/main.py` e `experiments/compare_modes.py`.
   case-insensitive sobre toda `entidades_mascaradas` a cada busca — funciona na escala desta PoC,
   não substitui um índice de nomes tokenizado/fuzzy em escala de produção.
 - **Sem fallback de visão** na extração — fora de escopo desta PoC (Seção 4.2 do brief).
-- **Ordem de leitura em colunas/tabelas**: heurística (posição de caracteres no `pdfplumber`,
-  `--psm 3` no Tesseract), não garantia — layouts muito complexos podem fragmentar o contexto do
-  chunk.
+- **Ordem de leitura em colunas/tabelas**: o caminho nativo (pdfplumber) agora detecta colunas por
+  coordenadas e reconstitui a ordem de leitura correta (Revisão 4 — ver `_detectar_gap_coluna` em
+  `ingestion/extract.py`), mas continua sendo heurística (gap horizontal + volume de palavras dos
+  dois lados), não garantia formal — layouts com 3+ colunas ou tabelas muito complexas podem ainda
+  fragmentar o contexto do chunk. O caminho OCR não tem detecção por coordenadas, só `--psm 3` do
+  Tesseract.
 - **Lista de categorias de sigilo incompleta**: só CPF, RG, telefone e nome de pessoa. Categorias
   que dependem de levantamento jurídico (ex: dado de vítima, segredo de justiça) não estão aqui —
   a tabela `categoria_sigilo` foi desenhada para acomodá-las sem mudança de código, não para já
   cobri-las.
-- **Nível de restrição do documento é regra simples, e agressiva na prática**: atribuído
-  automaticamente por presença de categoria sensível (ver Decisões técnicas). Na amostra, isso
-  classificou 69 de 70 documentos como sigilosos — um único CPF/RG em qualquer lugar do documento
-  já basta. Não reflete uma análise jurídica real de sensibilidade do conteúdo; em produção,
-  precisaria de granularidade por trecho/seção, não por documento inteiro.
+- **Nível de restrição do documento é regra simples**: atribuído automaticamente por presença de
+  categoria sensível (ver Decisões técnicas). Na amostra pós-correção do regex de RG (Revisão 3),
+  isso classifica 15 de 30 documentos como sigilosos e 15 como restritos — um único CPF/RG em
+  qualquer lugar do documento já basta para sigiloso. Não reflete uma análise jurídica real de
+  sensibilidade do conteúdo; em produção, precisaria de granularidade por trecho/seção, não por
+  documento inteiro.
 - **Gabarito do experimento é semiautomático**: construído com expressões regulares sobre o texto
   já extraído, cada acerto conferido por leitura humana antes de entrar no gabarito — não é uma
   anotação manual completa e independente por múltiplos revisores.

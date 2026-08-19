@@ -24,7 +24,7 @@ export function DetailPanel({
   onOpenFullDoc: () => void;
 }) {
   const [rastreabilidadeOpen, setRastreabilidadeOpen] = useState(false);
-  const title = resumoDe(r.texto);
+  const title = r.titulo || resumoDe(r.texto);
 
   return (
     <div
@@ -91,6 +91,15 @@ export function DetailPanel({
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 22 }}>
+        {r.sintese && (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-tertiary)", marginBottom: 8 }}>
+              Síntese do documento
+            </div>
+            <div style={{ fontSize: 14, lineHeight: 1.6, color: "var(--text-secondary)" }}>{r.sintese}</div>
+          </div>
+        )}
+
         <div>
           <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-tertiary)", marginBottom: 8 }}>
             Trecho no contexto

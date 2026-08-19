@@ -61,7 +61,7 @@ export const api = {
   },
 
   documentoCompleto: (id: string, perfil: Perfil) =>
-    req<{ arquivo_local: string; texto_completo: string; url_origem: string }>(
+    req<{ arquivo_local: string; titulo: string | null; sintese: string | null; texto_completo: string; url_origem: string }>(
       `/documentos/${id}/completo?perfil=${perfil}`
     ),
 
