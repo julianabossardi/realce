@@ -241,6 +241,33 @@ experimento (`experiments/compare_modes.py`) permanecessem na amostra final. Esc
 confiabilidade dentro do prazo é exatamente o tipo de troca que apareceria em produção também,
 numa forma maior (ver Riscos e evolução para produção).
 
+### Ajustes pós-reprocessamento: prioridade real, custo de avaliação e organização do backend
+
+Depois do reprocessamento, testes reais na interface (não só via API) expuseram mais alguns
+problemas, todos corrigidos:
+
+- **A busca não priorizava nada de fato**: o resultado ficava na ordem crua de recuperação
+  (RRF/léxico/vetorial), não na ordem da nota de avaliação por critério — apesar da interface se
+  chamar "busca priorizada". Corrigido em `app/routes/busca.py::_anexar_documentos_e_avaliar`, que
+  agora reordena por `score_criterios` antes de devolver.
+- **Custo de avaliação inviabilizava o uso interativo**: com `avaliar=true` (padrão) e o limite de
+  10 candidatos da interface, uma busca chegava a 40 chamadas sequenciais ao LLM local (minutos de
+  espera). Reduzido para 6 candidatos (`web/lib/api.ts`).
+- **Perfil padrão "sem clearance" escondia metade da amostra reduzida** (15 dos 30 documentos
+  nascem sigilosos pela regra binária de `nivel_restricao`) — o padrão da interface passou para
+  "com clearance" (`web/app/page.tsx`); o seletor de perfil continua existindo para simular a troca.
+- **Chips de busca de exemplo ficaram obsoletos** com a redução da amostra (buscavam temas
+  concentrados em documentos que saíram de 70 para 30) — substituídos por três consultas validadas
+  contra a amostra atual.
+- **Critérios apareciam com a chave crua do banco** (`valores_financeiros` em vez de "Valores
+  financeiros") — `web/lib/criterios.ts` adiciona um rótulo legível, com fallback automático
+  (snake_case → Title Case) para um critério novo cadastrado via banco que ainda não tenha rótulo
+  com curadoria manual.
+- **`app/main.py` reorganizado**: tinha ~520 linhas misturando busca, casos/dossiê, acervo,
+  feedback e stats de quarentena/padronizados num arquivo só. Dividido em `app/routes/` (um módulo
+  por área) sem mudar nenhum comportamento — mesma URL, mesmo request/response em cada endpoint,
+  verificado comparando a lista de rotas antes/depois e re-testando cada endpoint.
+
 ---
 
 ## O que mudou nesta revisão
