@@ -318,10 +318,18 @@ ollama pull qwen2.5:7b-instruct
 cp .env.example .env
 # nenhuma chave de API é necessária - só configuração de conexão local
 
-# 5. Ingestão (baixa a amostra, extrai texto, anonimiza, gera embeddings, carrega no banco)
+# 5. Dados: restaurar o dump pronto (recomendado) OU rodar a ingestão do zero
+#
+#    Opção A - restaurar o dump (ver "Dump do banco (db/seed/)" abaixo para
+#    o comando exato e a ORDEM correta em relação às migrations - alguns
+#    minutos).
+#
+#    Opção B - rodar o pipeline completo (extração + OCR + anonimização +
+#    chunking + embeddings + título/síntese por LLM sobre os 30 PDFs da
+#    amostra) - só em CPU local, pode levar de 1 a 2 horas:
 python ingestion/source_querido_diario.py   # baixa os PDFs (pula se já existirem)
 python ingestion/extract.py                 # extração em cascata (pdfplumber -> OCR) + quarentena
-python ingestion/index.py                   # anonimização + metadados + chunking + embeddings + carga
+python ingestion/index.py                   # normalização + anonimização + chunking + embeddings + título/síntese + carga
 
 # 6. Backend + demo
 uvicorn app.main:app --reload --port 8000
@@ -330,9 +338,13 @@ streamlit run app/demo_ui.py                # em outro terminal, interface alter
 # 7. Frontend novo (Next.js, revisão 3) - em outro terminal
 cd web
 npm install
-echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
+cp .env.local.example .env.local            # NEXT_PUBLIC_API_URL=http://localhost:8000 (ver nota abaixo)
 npm run dev                                 # http://localhost:3000
 ```
+
+`web/.env.local` é ignorado pelo git (contém a URL do backend, que muda entre
+ambientes - local vs. deploy híbrido no Vercel) - por isso não vem versionado e
+precisa ser criado a partir de `web/.env.local.example` em toda instalação nova.
 
 Para rodar a avaliação da hipótese (Seção 5, o principal artefato de comparação):
 
@@ -353,6 +365,44 @@ docker exec -i realce-db psql -U realce -d realce < db/migrations/0005_casos_dos
 
 Uma instalação nova (`docker compose up -d` num volume vazio) já roda todas as migrations,
 incluindo a 0005, automaticamente.
+
+### Dump do banco (`db/seed/`)
+
+Rodar o pipeline de ingestão do zero (Opção B acima) processa 30 documentos 100% em CPU local -
+extração, OCR quando necessário, anonimização, chunking, embeddings e uma chamada de LLM por
+documento para título/síntese - e pode levar de 1 a 2 horas. Para quem só quer ver a interface
+funcionando com dado real, `db/seed/realce_seed.sql.gz` é um dump do banco já processado (30
+documentos, chunks com embeddings, títulos/sínteses, entidades mascaradas, critérios e avaliações
+em cache, um caso de exemplo) - restaura em segundos.
+
+**Ordem correta em relação às migrations**: o Postgres só roda os arquivos de
+`/docker-entrypoint-initdb.d` (as migrations) na **primeira inicialização de um volume vazio** (ver
+nota acima) - isso acontece automaticamente e não tem como pular. Por isso a sequência é sempre:
+
+```bash
+# 1. Sobe o container - dispara as migrations automaticamente se o volume for novo
+docker compose up -d
+
+# 2. Restaura o dump por cima - o dump é gerado com --clean --if-exists, então ele
+#    mesmo derruba e recria schema (tabelas, função match_chunks, extensões) e dados;
+#    não precisa (nem faz mal) as migrations terem rodado antes
+gunzip -c db/seed/realce_seed.sql.gz | docker exec -i realce-db psql -U realce -d realce
+```
+
+Se o volume já existia de uma instalação anterior com dado diferente, rode `docker compose down -v`
+antes do passo 1 para garantir um volume limpo (isso apaga qualquer dado local que não esteja no
+dump).
+
+Depois de restaurado, pule a Opção B (ingestão) e vá direto para o passo 6 (backend + demo).
+
+**Por que versionar um dump de banco é aceitável aqui, e não seria em produção**: o conteúdo é
+público (diários oficiais de Niterói e Angra dos Reis, já publicados oficialmente pelos municípios
+- ver `ingestion/source_querido_diario.py`) e os dados mascarados (CPF, RG, telefone, nome) são
+pseudônimos, não os valores originais - o dump não expõe nada que já não estivesse público. Com o
+acervo real do MPRJ isso não seria aceitável: um dump versionado no git fica no histórico
+permanentemente (mesmo que a linha seja removida depois), então dado sensível real precisaria de um
+mecanismo de distribuição fora do controle de versão (storage com controle de acesso, backup
+criptografado), nunca comprometido a um repositório.
 
 ### Publicar o frontend (deploy híbrido - ver Revisão 3 para o porquê)
 
