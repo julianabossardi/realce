@@ -426,6 +426,22 @@ confusas (a senha "errada" era sempre rejeitada, mesmo estando correta, porque o
 trás da porta 5432 nem conhecia o usuário do projeto). Se sua máquina não tiver esse conflito, a
 porta 5433 continua funcionando normalmente — só ajuste `DATABASE_URL` se preferir 5432.
 
+### Nota sobre Colima (macOS) e o diretório do projeto
+
+Verificado rodando: se o Postgres sobe (`docker compose up -d`, `healthy`) mas qualquer consulta
+devolve `relation "..." does not exist` — as migrations não rodaram, mesmo com os arquivos existindo
+em `db/migrations/`. Com [Colima](https://github.com/abiosoft/colima) (comum em macOS como
+alternativa ao Docker Desktop), por padrão só o diretório `$HOME` é compartilhado com a VM onde o
+Docker roda (`mounts: []` em `~/.colima/default/colima.yaml`, com o comentário "Colima default
+behaviour: $HOME is mounted as writable"). Se o projeto estiver clonado **fora** de `$HOME` (ex:
+`/tmp`, um volume externo, um diretório de outro usuário), o bind mount
+`./db/migrations:/docker-entrypoint-initdb.d` do `docker-compose.yml` aponta para um caminho que a
+VM não enxerga — o container sobe normalmente (`healthy`), mas o diretório de migrations chega
+vazio dentro dele, e o Postgres pula a inicialização (log mostra
+`ignoring /docker-entrypoint-initdb.d/*`) sem erro visível em `docker compose up`. Solução: clonar o
+projeto dentro de `$HOME`, ou adicionar o caminho em `mounts:` no `colima.yaml` e reiniciar o Colima
+(`colima stop && colima start`).
+
 ---
 
 ## O que foi feito do zero / com IA / reaproveitado
