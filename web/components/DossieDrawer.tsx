@@ -1,6 +1,8 @@
 "use client";
 
-import { X } from "lucide-react";
+import { Download, X } from "lucide-react";
+import { TagList } from "@/components/TagList";
+import { tagsDoResultado } from "@/lib/tags";
 import type { DossieItem } from "@/lib/types";
 
 export function DossieDrawer({
@@ -75,8 +77,8 @@ export function DossieDrawer({
                   <X size={14} />
                 </button>
               </div>
-              <div style={{ fontSize: 13, color: "var(--text-primary)", lineHeight: 1.5, margin: "6px 0" }}>
-                {it.texto.slice(0, 160)}…
+              <div style={{ margin: "8px 0" }}>
+                <TagList tags={tagsDoResultado(it)} vazio="Sem critério de priorização atendido." />
               </div>
               <input
                 defaultValue={it.nota}
@@ -99,7 +101,7 @@ export function DossieDrawer({
         <div style={{ padding: "16px 24px", borderTop: "1px solid var(--border-subtle)" }}>
           <button
             disabled
-            title="Exportação ainda não disponível nesta versão."
+            title="Funcionalidade futura, ainda não implementada nesta PoC."
             style={{
               width: "100%",
               padding: "9px 0",
@@ -110,9 +112,14 @@ export function DossieDrawer({
               cursor: "not-allowed",
               fontSize: 13,
               fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
             }}
           >
-            Exportar dossiê
+            <Download size={14} />
+            Gerar relatório deste levantamento
           </button>
         </div>
       </div>

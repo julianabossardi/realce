@@ -51,6 +51,8 @@ export type DossieItem = {
   url_origem: string;
   titulo: string | null;
   tipo_documento: string | null;
+  metodo_extracao: string;
+  avaliacoes: { atende: boolean; criterio_chave: string }[];
 };
 
 export type AcervoDoc = {

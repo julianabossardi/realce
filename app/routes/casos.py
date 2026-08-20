@@ -85,14 +85,19 @@ def renomear_caso(caso_id: str, req: CasoRenameRequest):
 
 @router.get("/{caso_id}/dossie")
 def listar_dossie(caso_id: str):
+    """Alem dos metadados do chunk salvo, anexa as avaliacoes por criterio
+    JA EM CACHE (Secao 4.6) - sem chamar o LLM aqui, so reaproveita o que
+    a busca ja avaliou quando o item foi salvo. Usado pela interface para
+    marcar tags de criterio no card do dossie, no lugar de mostrar um
+    pedaco cru do trecho (ver README, Revisao 4 - ajustes pos-demo)."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 select di.id, di.chunk_id, di.nota, di.tema, di.criado_em,
-                       c.texto, c.pagina, d.arquivo_local, d.municipio, d.data_publicacao, d.url_origem,
-                       d.titulo, d.tipo_documento
+                       c.texto, c.pagina, c.metodo_extracao, d.arquivo_local, d.municipio,
+                       d.data_publicacao, d.url_origem, d.titulo, d.tipo_documento
                 from dossie_items di
                 join chunks c on c.id = di.chunk_id
                 join documentos d on d.id = c.documento_id
@@ -101,7 +106,28 @@ def listar_dossie(caso_id: str):
                 """,
                 (caso_id,),
             )
-            return {"itens": cur.fetchall()}
+            itens = cur.fetchall()
+
+            chunk_ids = [it["chunk_id"] for it in itens]
+            avaliacoes_por_chunk: dict[str, list[dict]] = {}
+            if chunk_ids:
+                cur.execute(
+                    """
+                    select a.chunk_id, a.atende, cr.chave as criterio_chave
+                    from avaliacoes a
+                    join criterio cr on cr.id = a.criterio_id and cr.versao = a.criterio_versao
+                    where cr.ativo = true and a.chunk_id = any(%s)
+                    """,
+                    (chunk_ids,),
+                )
+                for row in cur.fetchall():
+                    avaliacoes_por_chunk.setdefault(row["chunk_id"], []).append(
+                        {"atende": row["atende"], "criterio_chave": row["criterio_chave"]}
+                    )
+
+        for it in itens:
+            it["avaliacoes"] = avaliacoes_por_chunk.get(it["chunk_id"], [])
+        return {"itens": itens}
     finally:
         conn.close()
 

@@ -203,21 +203,24 @@ export function DetailPanel({
           gap: 10,
         }}
       >
-        <div style={{ display: "flex", gap: 4 }}>
-          <button
-            onClick={() => onSetRelevancia(relevancia === true ? null : true)}
-            aria-label="Relevante"
-            style={{ ...iconButtonStyle, background: relevancia === true ? "var(--orange-600)" : "transparent", color: relevancia === true ? "#fff" : "var(--text-secondary)" }}
-          >
-            <ThumbsUp size={16} />
-          </button>
-          <button
-            onClick={() => onSetRelevancia(relevancia === false ? null : false)}
-            aria-label="Não relevante"
-            style={{ ...iconButtonStyle, background: relevancia === false ? "var(--orange-600)" : "transparent", color: relevancia === false ? "#fff" : "var(--text-secondary)" }}
-          >
-            <ThumbsDown size={16} />
-          </button>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>Essa priorização está coerente com a pesquisa?</span>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button
+              onClick={() => onSetRelevancia(relevancia === true ? null : true)}
+              aria-label="Relevante"
+              style={{ ...iconButtonStyle, background: relevancia === true ? "var(--orange-600)" : "transparent", color: relevancia === true ? "#fff" : "var(--text-secondary)" }}
+            >
+              <ThumbsUp size={16} />
+            </button>
+            <button
+              onClick={() => onSetRelevancia(relevancia === false ? null : false)}
+              aria-label="Não relevante"
+              style={{ ...iconButtonStyle, background: relevancia === false ? "var(--orange-600)" : "transparent", color: relevancia === false ? "#fff" : "var(--text-secondary)" }}
+            >
+              <ThumbsDown size={16} />
+            </button>
+          </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onOpenFullDoc} style={secondaryButtonStyle}>

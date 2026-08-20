@@ -7,8 +7,10 @@ import { DossieDrawer } from "@/components/DossieDrawer";
 import { FullDocModal } from "@/components/FullDocModal";
 import { ResultCard } from "@/components/ResultCard";
 import { Sidebar } from "@/components/Sidebar";
+import { TagList } from "@/components/TagList";
 import { api } from "@/lib/api";
-import type { AcervoDoc, AcervoNaoProcessado, Caso, DossieItem, ModoBusca, Perfil, ResultadoBusca } from "@/lib/types";
+import { tagsDoResultado } from "@/lib/tags";
+import type { AcervoDoc, AcervoNaoProcessado, Caso, DossieItem, Perfil, ResultadoBusca } from "@/lib/types";
 
 type View = "home" | "busca" | "acervo";
 
@@ -21,13 +23,7 @@ type View = "home" | "busca" | "acervo";
 const EXEMPLOS = [
   "Existem processos de readaptação funcional de servidores?",
   "Portaria nº 1003/2026",
-  "Elizabete Mocaiber Freire",
-];
-
-const MODOS: { value: ModoBusca; label: string }[] = [
-  { value: "lexico", label: "Léxica" },
-  { value: "vetorial", label: "Semântica" },
-  { value: "hibrido", label: "Híbrida" },
+  "Gratificação de exercício de função extraordinária",
 ];
 
 export default function Page() {
@@ -46,7 +42,6 @@ export default function Page() {
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
-  const [modo, setModo] = useState<ModoBusca>("hibrido");
   const [resultados, setResultados] = useState<ResultadoBusca[]>([]);
   const [showLower, setShowLower] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -155,7 +150,7 @@ export default function Page() {
     try {
       const resp = await api.buscar({
         consulta: q,
-        modo,
+        modo: "hibrido", // unico modo exposto na interface (Revisao 4) - lexico/vetorial isolados continuam existindo na API/experimento
         perfil,
         filtro_municipio: filtroMunicipio || null,
         filtro_tipo_documento: filtroTipo || null,
@@ -308,7 +303,7 @@ export default function Page() {
                 {!hasSearched && !searching && (
                   <>
                     <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 10 }}>
-                      Aceita pergunta em linguagem natural ou termo exato — não é preciso escolher um modo.
+                      Aceita pergunta em linguagem natural ou termo exato.
                     </div>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
                       {EXEMPLOS.map((ex) => (
@@ -330,7 +325,9 @@ export default function Page() {
                       {dossieItems.slice(0, 3).map((it) => (
                         <div key={it.id} style={{ border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-md)", padding: "10px 12px", background: "var(--neutral-0)" }}>
                           <div style={{ fontSize: 12, color: "var(--orange-700)" }}>{it.titulo || it.arquivo_local}</div>
-                          <div style={{ fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>{it.texto.slice(0, 100)}</div>
+                          <div style={{ marginTop: 6 }}>
+                            <TagList tags={tagsDoResultado(it)} vazio="Sem critério de priorização atendido." />
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -345,29 +342,6 @@ export default function Page() {
                         Filtros
                         {filtersOpen ? <ChevronUp size={14} style={{ marginLeft: 6 }} /> : <ChevronDown size={14} style={{ marginLeft: 6 }} />}
                       </button>
-                      <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                        <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>Modo de busca</span>
-                        <div style={{ display: "flex", background: "var(--neutral-100)", borderRadius: "var(--radius-pill)", padding: 2 }}>
-                          {MODOS.map((m) => (
-                            <button
-                              key={m.value}
-                              onClick={() => setModo(m.value)}
-                              style={{
-                                padding: "5px 10px",
-                                borderRadius: "var(--radius-pill)",
-                                border: "none",
-                                fontSize: 12,
-                                fontWeight: 600,
-                                cursor: "pointer",
-                                background: modo === m.value ? "var(--orange-600)" : "transparent",
-                                color: modo === m.value ? "#fff" : "var(--text-secondary)",
-                              }}
-                            >
-                              {m.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
                     </div>
 
                     {filtersOpen && (

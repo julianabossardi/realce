@@ -1,6 +1,7 @@
 "use client";
 
 import { X } from "lucide-react";
+import { formatarDocumento } from "@/lib/formatarDocumento";
 import { renderTextoComMascara } from "@/lib/mask";
 
 export function FullDocModal({
@@ -46,8 +47,32 @@ export function FullDocModal({
             <X size={16} />
           </button>
         </div>
-        <div style={{ padding: 24, overflowY: "auto", fontSize: 15, lineHeight: 1.7, color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>
-          {carregando ? "Carregando…" : texto ? renderTextoComMascara(texto) : erro || "Não foi possível carregar o documento."}
+        <div style={{ padding: 24, overflowY: "auto", fontSize: 15, lineHeight: 1.7, color: "var(--text-primary)" }}>
+          {carregando
+            ? "Carregando…"
+            : texto
+            ? formatarDocumento(texto).map((bloco, i) =>
+                bloco.tipo === "titulo" ? (
+                  <div
+                    key={i}
+                    style={{
+                      fontFamily: "var(--font-display)",
+                      fontWeight: 700,
+                      fontSize: 16,
+                      color: "var(--text-primary)",
+                      marginTop: i === 0 ? 0 : 20,
+                      marginBottom: 10,
+                    }}
+                  >
+                    {renderTextoComMascara(bloco.texto)}
+                  </div>
+                ) : (
+                  <p key={i} style={{ margin: "0 0 14px", whiteSpace: "pre-wrap" }}>
+                    {renderTextoComMascara(bloco.texto)}
+                  </p>
+                )
+              )
+            : erro || "Não foi possível carregar o documento."}
         </div>
       </div>
     </div>

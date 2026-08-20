@@ -1,7 +1,8 @@
 "use client";
 
-import { rotuloCriterio } from "@/lib/criterios";
+import { TagList } from "@/components/TagList";
 import { resumoDe } from "@/lib/resumo";
+import { tagsDoResultado } from "@/lib/tags";
 import type { ResultadoBusca } from "@/lib/types";
 
 export function scoreTier(r: ResultadoBusca): { label: string; bg: string; color: string } {
@@ -25,11 +26,16 @@ export function ResultCard({
   opacity?: number;
 }) {
   const tier = scoreTier(r);
-  const criteriosAtendidos = r.avaliacoes.filter((a) => a.atende).slice(0, 2);
   // titulo do documento (gerado na ingestao por LLM, uma vez por documento -
   // nao mais um corte cru do chunk); resumoDe so entra como fallback para
   // dados ingeridos antes dessa camada existir, ou se a geracao falhou.
   const titulo = r.titulo || resumoDe(r.texto);
+  // tags no lugar de um pedaco cru do trecho: um recorte de texto fora de
+  // contexto, mal formatado e representando so parte do material nao
+  // ajudava o analista a decidir se vale abrir o card - os criterios
+  // atendidos (e o metodo de extracao, quando OCR) complementam melhor o
+  // titulo (ver README, Revisao 4 - ajustes pos-demo).
+  const tags = tagsDoResultado(r);
 
   return (
     <div
@@ -65,20 +71,6 @@ export function ResultCard({
           <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text-primary)", lineHeight: 1.4 }}>
             {titulo}
           </div>
-          <div
-            style={{
-              fontSize: 13,
-              color: "var(--text-secondary)",
-              marginTop: 4,
-              lineHeight: 1.5,
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
-            }}
-          >
-            {r.texto}
-          </div>
           <div style={{ fontSize: 12.5, color: "var(--text-tertiary)", marginTop: 4 }}>
             {r.municipio} · {r.data_publicacao}
             {r.pagina ? ` · p. ${r.pagina}` : ""}
@@ -86,23 +78,7 @@ export function ResultCard({
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {criteriosAtendidos.map((c) => (
-            <span
-              key={c.criterio_id}
-              style={{
-                background: "var(--neutral-100)",
-                border: "1px solid var(--border-subtle)",
-                borderRadius: "var(--radius-sm)",
-                padding: "3px 9px",
-                fontSize: 12,
-                color: "var(--text-primary)",
-              }}
-            >
-              {rotuloCriterio(c.criterio_chave)}
-            </span>
-          ))}
-        </div>
+        <TagList tags={tags} />
         <div onClick={(e) => e.stopPropagation()}>
           <button
             onClick={onToggleSave}
@@ -115,6 +91,7 @@ export function ResultCard({
               background: isSaved ? "var(--neutral-0)" : "var(--orange-600)",
               color: isSaved ? "var(--text-primary)" : "#fff",
               cursor: "pointer",
+              flexShrink: 0,
             }}
           >
             {isSaved ? "Remover do dossiê" : "Salvar no dossiê"}
