@@ -27,12 +27,12 @@ export const api = {
   }) =>
     req<{ resultados: ResultadoBusca[] }>("/search", {
       method: "POST",
-      // limite baixo por padrao: cada resultado com avaliar=true (padrao)
-      // dispara ate 4 chamadas ao LLM local (uma por criterio) - com 10
-      // candidatos isso significava ate 40 chamadas sequenciais por busca
-      // (minutos de espera). 6 casa com o "top 6" que a interface mostra
-      // em destaque (ver `top`/`lower` em app/page.tsx).
-      body: JSON.stringify({ limite: 6, ...params }),
+      // sem "limite" fixo aqui de proposito: cada resultado com avaliar=true
+      // (padrao) dispara ate 4 chamadas ao LLM local (uma por criterio), e o
+      // top-k efetivo e controlado num unico lugar no backend
+      // (app/routes/busca.py::LIMITE_PADRAO, ajustavel via DEMO_TOP_K) -
+      // evita ter dois valores (front e back) que podem ficar dessincronizados.
+      body: JSON.stringify(params),
     }),
 
   filtros: () => req<{ municipios: string[]; tipos_documento: string[] }>("/filtros"),

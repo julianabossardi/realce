@@ -9,6 +9,16 @@ export function scoreTier(r: ResultadoBusca): { label: string; bg: string; color
   const s = r.score_criterios ?? 0;
   if (s >= 0.7) return { label: "Alta relevância", bg: "var(--priority-high-bg)", color: "var(--priority-high)" };
   if (s >= 0.35) return { label: "Média relevância", bg: "var(--priority-medium-bg)", color: "var(--priority-medium)" };
+  // Nenhum critério de priorização "bateu" (score 0) não é o mesmo que "sem
+  // relevância" - o resultado ainda pode ter sido encontrado pelos dois
+  // caminhos de busca (léxico + vetorial concordando), sinal genuíno de
+  // confiança da busca híbrida mesmo sem atender a um critério específico.
+  // Sem isso, a distribuição de score por critério fica quase binária (0 ou
+  // ~1) e quase tudo cai em "baixa relevância", escondendo o que a busca já
+  // acertou.
+  if ((r.encontrado_em?.length ?? 0) >= 2) {
+    return { label: "Média relevância", bg: "var(--priority-medium-bg)", color: "var(--priority-medium)" };
+  }
   return { label: "Baixa relevância", bg: "var(--priority-low-bg)", color: "var(--priority-low)" };
 }
 

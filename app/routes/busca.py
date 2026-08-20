@@ -6,6 +6,8 @@ misturava busca, casos, dossie, acervo e stats.
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -16,11 +18,19 @@ from app.search import buscar
 
 router = APIRouter()
 
+# Top-k padrao entre a busca hibrida/RRF e a avaliacao por criterio do LLM -
+# controla quantos chunks o LLM avalia por busca (custo = ate limite x
+# criterios ativos chamadas). AJUSTE TEMPORARIO DE DEMO: sobrescrito via
+# variavel de ambiente DEMO_TOP_K (ver .env, nao versionado) para reduzir a
+# latencia da busca ao vivo - o padrao normal do codigo continua 8. Reverter
+# e so remover/comentar DEMO_TOP_K no .env local, sem mudar codigo.
+LIMITE_PADRAO = int(os.environ.get("DEMO_TOP_K", "8"))
+
 
 class BuscaRequest(BaseModel):
     consulta: str
     modo: str = "hibrido"  # "lexico" | "vetorial" | "hibrido"
-    limite: int = 8
+    limite: int = LIMITE_PADRAO
     perfil: str = "sem_clearance"  # "sem_clearance" | "com_clearance"
     filtro_municipio: str | None = None
     filtro_tipo_documento: str | None = None
