@@ -294,7 +294,16 @@ Nada da arquitetura 100% local (Postgres/pgvector via Docker, Ollama, sentence-t
 
 ## Setup e reprodução
 
-Pré-requisitos: macOS/Linux, Python 3.12, Docker (ou Colima), [Ollama](https://ollama.com).
+Pré-requisitos: macOS/Linux, Python 3.12, Docker (ou Colima), [Ollama](https://ollama.com),
+`tesseract` e `poppler` (binários de sistema, não instalam via `pip` — usados por `pytesseract`/
+`pdf2image` no caminho de OCR da extração):
+
+```bash
+# macOS
+brew install tesseract poppler
+# Debian/Ubuntu
+sudo apt-get install tesseract-ocr poppler-utils
+```
 
 ```bash
 # 1. Ambiente Python (compartilhado entre ingestion/ e app/)
